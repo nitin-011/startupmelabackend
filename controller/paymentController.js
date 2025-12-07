@@ -109,18 +109,18 @@ export const checkStatus = async (req, res) => {
       if (ticket) sendInvoiceEmail(ticket);
 
       // Redirect User to Frontend Success Page
-      res.redirect(`http://localhost:5173/payment-success?id=${transactionId}`);
+      res.redirect(`https://startupmela.com/payment-success?id=${transactionId}`);
     } else {
       // Update DB to Failed
       await Ticket.findOneAndUpdate(
         { transactionId },
         { paymentStatus: "FAILED" }
       );
-      res.redirect(`http://localhost:5173/payment-failed`);
+      res.redirect(`https://startupmela.com/payment-failed`);
     }
 
   } catch (error) {
     console.error("Status Check Error:", error.message);
-    res.redirect(`http://localhost:5173/payment-failed`);
+    res.redirect(`https://startupmela.com/payment-failed`);
   }
 };
