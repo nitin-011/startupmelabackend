@@ -107,21 +107,17 @@ export const createOrder = async (req, res) => {
     console.log('   Amount:', amount);
     console.log('   Phone:', phone);
 
-    // Create payment request using PhonePe SDK with all required fields
+    // Create payment request using PhonePe SDK
     const redirectUrl = `${FRONTEND_URL}/payment-success?id=${merchantTransactionId}`;
-    const callbackUrl = `${BACKEND_URL}/api/payment/status/${merchantTransactionId}`;
 
     const paymentRequest = StandardCheckoutPayRequest.builder()
       .merchantOrderId(merchantTransactionId)
       .amount(amount * 100) // Convert to paise
       .redirectUrl(redirectUrl)
-      .callbackUrl(callbackUrl)
-      .mobileNumber(phone)
       .build();
 
     console.log('📞 Calling PhonePe API...');
     console.log('   Redirect URL (Frontend):', redirectUrl);
-    console.log('   Callback URL (Backend):', callbackUrl);
 
     // Call PhonePe API using SDK with timeout
     const response = await Promise.race([
