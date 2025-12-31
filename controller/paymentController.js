@@ -3,13 +3,13 @@ import crypto from 'crypto';
 import Ticket from '../model/Ticket.js';
 import { sendInvoiceEmail } from '../utils/sendEmails.js';
 
-// PhonePe Config from .env
-const MERCHANT_ID = process.env.PHONEPE_MERCHANT_ID;
-const SALT_KEY = process.env.PHONEPE_SALT_KEY;
-const SALT_INDEX = process.env.PHONEPE_SALT_INDEX;
-const HOST_URL = process.env.PHONEPE_HOST_URL;
-const BACKEND_URL = process.env.BACKEND_URL || 'https://startupmelabackend.vercel.app';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://startupmela.com';
+// PhonePe Config - Hardcoded
+const MERCHANT_ID = "SU2512051700428638464582";
+const SALT_KEY = "b2dc0e25-ad2d-4bd4-86a2-c6a64730ebba";
+const SALT_INDEX = "1";
+const HOST_URL = "https://api.phonepe.com/apis/hermes";
+const BACKEND_URL = "https://startupmelabackend.vercel.app";
+const FRONTEND_URL = "https://startupmela.com";
 
 // Validate environment variables
 if (!MERCHANT_ID || !SALT_KEY || !SALT_INDEX || !HOST_URL) {

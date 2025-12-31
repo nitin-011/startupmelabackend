@@ -1,18 +1,16 @@
 import nodemailer from 'nodemailer';
-import dotenv from 'dotenv';
-dotenv.config();
 
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
+    user: "your-email@gmail.com",
+    pass: "your-gmail-app-password",
   },
 });
 
 export const sendInvoiceEmail = async (ticket) => {
   const mailOptions = {
-    from: `"Startup Mela" <${process.env.EMAIL_USER}>`,
+    from: `"Startup Mela" <your-email@gmail.com>`,
     to: ticket.email,
     subject: `Ticket Confirmed: ${ticket.passType}`,
     html: `

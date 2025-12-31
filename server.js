@@ -1,10 +1,7 @@
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import connectDB from "./config/db.js";
 import apiRouter from "./routes/apiRoutes.js";
-
-dotenv.config();
 
 const app = express();
 
@@ -12,7 +9,7 @@ const app = express();
 // 1. CORS CONFIGURATION
 // -----------------------------------------
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || "http://localhost:5173",
+  origin: "https://startupmela.com",
   credentials: true, // Allow cookies/headers
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
@@ -51,7 +48,7 @@ app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
     timestamp: new Date().toISOString(),
-    env: process.env.NODE_ENV
+    env: "production"
   });
 });
 

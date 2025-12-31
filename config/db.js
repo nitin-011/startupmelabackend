@@ -8,12 +8,7 @@ const connectDB = async () => {
     return;
   }
 
-  const uri = process.env.MONGO_URI;
-
-  if (!uri) {
-    // THROW error instead of exiting so server.js can catch it
-    throw new Error("❌ MONGO_URI missing in .env");
-  }
+  const uri = "mongodb+srv://chalananitin161_db_user:Bj2nRmzcON7og2xD@cluster0.accdd74.mongodb.net/startupmela?retryWrites=true&w=majority";
 
   try {
     await mongoose.connect(uri);
