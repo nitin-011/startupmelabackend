@@ -3,18 +3,23 @@ import Ticket from '../model/Ticket.js';
 import { sendInvoiceEmail } from '../utils/sendEmails.js';
 
 // PhonePe Config
-const MERCHANT_ID = "SU2512051700428638464582";
-const SALT_KEY = "b2dc0e25-ad2d-4bd4-86a2-c6a64730ebba";
-const SALT_INDEX = 1;
+const CLIENT_ID = "SU2512051700428638464582";
+const CLIENT_SECRET = "b2dc0e25-ad2d-4bd4-86a2-c6a64730ebba";
+const CLIENT_VERSION = 1;
 const BACKEND_URL = "https://startupmelabackend.vercel.app";
 const FRONTEND_URL = "https://startupmela.com";
 
+console.log('🔐 PhonePe Configuration:');
+console.log('   Client ID:', CLIENT_ID);
+console.log('   Client Version:', CLIENT_VERSION);
+console.log('   Environment: PRODUCTION');
+
 // Initialize PhonePe Client
 const phonepeClient = StandardCheckoutClient.getInstance(
-  MERCHANT_ID,
-  SALT_KEY,
-  SALT_INDEX,
-  Env.SANDBOX
+  CLIENT_ID,
+  CLIENT_SECRET,
+  CLIENT_VERSION,
+  Env.PRODUCTION
 );
 
 console.log('✅ PhonePe SDK initialized');
@@ -66,7 +71,7 @@ export const createOrder = async (req, res) => {
     }
 
     // Check for environment variables
-    if (!MERCHANT_ID || !SALT_KEY || !SALT_INDEX) {
+    if (!CLIENT_ID || !CLIENT_SECRET || !CLIENT_VERSION) {
       console.error('PhonePe credentials not configured');
       return res.status(500).json({
         success: false,
