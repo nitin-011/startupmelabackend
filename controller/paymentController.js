@@ -125,7 +125,8 @@ export const createOrder = async (req, res) => {
         headers: {
           "Content-Type": "application/json",
           "X-VERIFY": xVerify,
-          accept: "application/json",
+          "X-MERCHANT-ID": MERCHANT_ID,
+          "accept": "application/json",
         },
       }
     );
