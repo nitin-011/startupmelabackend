@@ -7,7 +7,7 @@ import { sendInvoiceEmail } from '../utils/sendEmails.js';
 const MERCHANT_ID = "SU2512051700428638464582";
 const SALT_KEY = "b2dc0e25-ad2d-4bd4-86a2-c6a64730ebba";
 const SALT_INDEX = "1";
-const HOST_URL = "https://api.phonepe.com/apis/hermes";
+const HOST_URL = "https://api.phonepe.com/apis/pg";
 const BACKEND_URL = "https://startupmelabackend.vercel.app";
 const FRONTEND_URL = "https://startupmela.com";
 
@@ -108,18 +108,18 @@ export const createOrder = async (req, res) => {
     const base64EncodedPayload = bufferObj.toString("base64");
 
     // Calculate X-VERIFY Checksum
-    const stringToHash = base64EncodedPayload + "/pg/v1/pay" + SALT_KEY;
+    const stringToHash = base64EncodedPayload + "/checkout/v2/pay" + SALT_KEY;
     const sha256 = crypto.createHash("sha256").update(stringToHash).digest("hex");
     const xVerify = sha256 + "###" + SALT_INDEX;
 
     // Call PhonePe API
-    console.log('📞 Calling PhonePe API:', `${HOST_URL}/pg/v1/pay`);
+    console.log('📞 Calling PhonePe API:', `${HOST_URL}/checkout/v2/pay`);
     console.log('📦 Payload:', JSON.stringify(payload, null, 2));
     console.log('🔐 X-VERIFY Header:', xVerify);
     console.log('🔑 Merchant ID:', MERCHANT_ID);
 
     const response = await axios.post(
-      `${HOST_URL}/pg/v1/pay`,
+      `${HOST_URL}/checkout/v2/pay`,
       { request: base64EncodedPayload },
       {
         headers: {
@@ -151,7 +151,7 @@ export const createOrder = async (req, res) => {
 
   } catch (error) {
     console.error("❌ Payment Error:", error.message);
-    console.error("📍 Request URL:", `${HOST_URL}/pg/v1/pay`);
+    console.error("📍 Request URL:", `${HOST_URL}/checkout/v2/pay`);
     console.error("📦 Response Status:", error.response?.status);
     console.error("📄 Response Data:", JSON.stringify(error.response?.data, null, 2));
     console.error("🔍 Full Error:", error.response?.statusText);
@@ -198,13 +198,13 @@ export const checkStatus = async (req, res) => {
 
   try {
     // Generate Checksum for Status API
-    const stringToHash = `/pg/v1/status/${MERCHANT_ID}/${transactionId}` + SALT_KEY;
+    const stringToHash = `/checkout/v2/order/${MERCHANT_ID}/${transactionId}/status` + SALT_KEY;
     const sha256 = crypto.createHash("sha256").update(stringToHash).digest("hex");
     const xVerify = sha256 + "###" + SALT_INDEX;
 
     // Call PhonePe Status API
     const response = await axios.get(
-      `${HOST_URL}/pg/v1/status/${MERCHANT_ID}/${transactionId}`,
+      `${HOST_URL}/checkout/v2/order/${MERCHANT_ID}/${transactionId}/status`,
       {
         headers: {
           "Content-Type": "application/json",
