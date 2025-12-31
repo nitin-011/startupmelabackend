@@ -11,23 +11,8 @@ const app = express();
 // -----------------------------------------
 // 1. CORS CONFIGURATION
 // -----------------------------------------
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://startup-mela-beta.vercel.app",
-  "https://startupmela.com",
-  "https://www.startupmela.com"
-];
-
 const corsOptions = {
-  origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: process.env.FRONTEND_URL || "http://localhost:5173",
   credentials: true, // Allow cookies/headers
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
@@ -63,10 +48,10 @@ app.use(async (req, res, next) => {
 app.use("/api", apiRouter);
 
 app.get("/api/health", (req, res) => {
-  res.json({ 
-    status: "ok", 
+  res.json({
+    status: "ok",
     timestamp: new Date().toISOString(),
-    env: process.env.NODE_ENV 
+    env: process.env.NODE_ENV
   });
 });
 
