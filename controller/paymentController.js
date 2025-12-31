@@ -17,6 +17,55 @@ if (!MERCHANT_ID || !SALT_KEY || !SALT_INDEX || !HOST_URL) {
   console.error('❌ Missing PhonePe credentials in environment variables');
 }
 
+// Credential verification cache
+let credentialsVerified = false;
+let verificationToken = null;
+
+// Verify PhonePe Credentials
+const verifyCredentials = async () => {
+  // Return cached verification if already verified
+  if (credentialsVerified && verificationToken) {
+    console.log('✅ Using cached credential verification');
+    return true;
+  }
+
+  try {
+    console.log('🔐 Verifying PhonePe credentials via authorization endpoint...');
+
+    const response = await axios.post(
+      `${AUTHORIZATION_URL}/v1/oauth/token`,
+      {
+        grant_type: 'client_credentials',
+        client_id: MERCHANT_ID,
+        client_secret: SALT_KEY
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'accept': 'application/json'
+        },
+        timeout: 10000 // 10 second timeout
+      }
+    );
+
+    if (response.data && response.data.access_token) {
+      verificationToken = response.data.access_token;
+      credentialsVerified = true;
+      console.log('✅ PhonePe credentials verified successfully');
+      return true;
+    } else {
+      console.error('❌ No access token received from authorization endpoint');
+      return false;
+    }
+  } catch (error) {
+    console.error('❌ Credential Verification Failed:', error.message);
+    console.error('📄 Response Status:', error.response?.status);
+    console.error('📄 Response Data:', JSON.stringify(error.response?.data, null, 2));
+    credentialsVerified = false;
+    return false;
+  }
+};
+
 // 1. Create Payment Order
 export const createOrder = async (req, res) => {
   let merchantTransactionId = null; // Define outside try block for cleanup access
@@ -68,6 +117,16 @@ export const createOrder = async (req, res) => {
       });
     }
 
+    // Verify PhonePe credentials before processing payment
+    const isVerified = await verifyCredentials();
+    if (!isVerified) {
+      console.error('❌ PhonePe credential verification failed');
+      return res.status(503).json({
+        success: false,
+        message: 'Payment gateway authentication failed. Please contact support.'
+      });
+    }
+
     // Generate unique Transaction ID with better randomness
     merchantTransactionId = `MT${Date.now()}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
@@ -109,25 +168,31 @@ export const createOrder = async (req, res) => {
     const base64EncodedPayload = bufferObj.toString("base64");
 
     // Calculate X-VERIFY Checksum
-    const stringToHash = base64EncodedPayload + "/checkout/v2/pay" + SALT_KEY;
+    // Format: SHA256(base64Payload + apiEndpoint + saltKey) + "###" + saltIndex
+    const apiEndpoint = "/pg/v1/pay";
+    const stringToHash = base64EncodedPayload + apiEndpoint + SALT_KEY;
     const sha256 = crypto.createHash("sha256").update(stringToHash).digest("hex");
     const xVerify = sha256 + "###" + SALT_INDEX;
 
-    // Call PhonePe API
-    console.log('📞 Calling PhonePe API:', `${HOST_URL}/checkout/v2/pay`);
+    console.log('\n=== PhonePe Payment Request Debug ===');
+    console.log('📞 API URL:', `${HOST_URL}/v1/pay`);
     console.log('📦 Payload:', JSON.stringify(payload, null, 2));
-    console.log('🔐 X-VERIFY Header:', xVerify);
+    console.log('📧 Base64 Payload (first 50 chars):', base64EncodedPayload.substring(0, 50) + '...');
+    console.log('🔗 Endpoint for hash:', apiEndpoint);
     console.log('🔑 Merchant ID:', MERCHANT_ID);
+    console.log('🔐 Salt Index:', SALT_INDEX);
+    console.log('🔒 X-VERIFY:', xVerify);
+    console.log('=====================================\n');
 
     const response = await axios.post(
-      `${HOST_URL}/checkout/v2/pay`,
+      `${HOST_URL}/v1/pay`,
       { request: base64EncodedPayload },
       {
         headers: {
           "Content-Type": "application/json",
           "X-VERIFY": xVerify,
           "X-MERCHANT-ID": MERCHANT_ID,
-          "accept": "application/json",
+          "accept": "application/json"
         },
       }
     );
@@ -200,18 +265,29 @@ export const checkStatus = async (req, res) => {
 
   try {
     // Generate Checksum for Status API
-    const stringToHash = `/checkout/v2/order/${transactionId}/status` + SALT_KEY;
+    // Format: SHA256(apiEndpoint + saltKey) + "###" + saltIndex
+    const apiEndpoint = `/pg/v1/status/${MERCHANT_ID}/${transactionId}`;
+    const stringToHash = apiEndpoint + SALT_KEY;
     const sha256 = crypto.createHash("sha256").update(stringToHash).digest("hex");
     const xVerify = sha256 + "###" + SALT_INDEX;
 
+    console.log('\n=== PhonePe Status Check Debug ===');
+    console.log('🔍 Status API URL:', `${HOST_URL}/v1/status/${MERCHANT_ID}/${transactionId}`);
+    console.log('🔗 Endpoint for hash:', apiEndpoint);
+    console.log('🔑 Merchant ID:', MERCHANT_ID);
+    console.log('🎫 Transaction ID:', transactionId);
+    console.log('🔒 X-VERIFY:', xVerify);
+    console.log('==================================\n');
+
     // Call PhonePe Status API
     const response = await axios.get(
-      `${HOST_URL}/checkout/v2/order/${transactionId}/status`,
+      `${HOST_URL}/v1/status/${MERCHANT_ID}/${transactionId}`,
       {
         headers: {
           "Content-Type": "application/json",
-          "X-MERCHANT-ID": MERCHANT_ID,
           "X-VERIFY": xVerify,
+          "X-MERCHANT-ID": MERCHANT_ID,
+          "accept": "application/json"
         },
       }
     );
