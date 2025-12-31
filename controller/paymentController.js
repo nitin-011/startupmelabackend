@@ -21,7 +21,11 @@ console.log('✅ PhonePe SDK initialized');
 
 // 1. Create Payment Order
 export const createOrder = async (req, res) => {
-  let merchantTransactionId = null; // Define outside try block for cleanup access
+  let merchantTransactionId = null;
+
+  console.log('\n🚀 === Payment Request Received ===');
+  console.log('📥 Request Body:', JSON.stringify(req.body, null, 2));
+  console.log('⏰ Timestamp:', new Date().toISOString());
 
   try {
     const { name, email, phone, passType, amount, quantity } = req.body;
@@ -106,14 +110,21 @@ export const createOrder = async (req, res) => {
       .redirectUrl(redirectUrl)
       .build();
 
-    // Call PhonePe API using SDK
-    const response = await phonepeClient.pay(paymentRequest);
+    console.log('📞 Calling PhonePe API...');
 
-    console.log('✅ PhonePe SDK Response:', response);
+    // Call PhonePe API using SDK with timeout
+    const response = await Promise.race([
+      phonepeClient.pay(paymentRequest),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('PhonePe API timeout after 30 seconds')), 30000)
+      )
+    ]);
+
+    console.log('✅ PhonePe SDK Response:', JSON.stringify(response, null, 2));
 
     if (response && response.redirectUrl) {
       // Send Redirect URL to Frontend
-      res.json({
+      return res.json({
         success: true,
         redirectUrl: response.redirectUrl,
         orderId: merchantTransactionId
@@ -122,18 +133,20 @@ export const createOrder = async (req, res) => {
       // Delete the pending ticket if PhonePe fails
       await Ticket.findOneAndDelete({ orderId: merchantTransactionId });
 
-      res.status(400).json({
+      return res.status(400).json({
         success: false,
-        message: "Payment gateway error"
+        message: "Payment gateway error - no redirect URL received"
       });
     }
 
   } catch (error) {
     console.error("❌ Payment Error:", error.message);
-    console.error("📍 Request URL:", `${HOST_URL}/checkout/v2/pay`);
-    console.error("📦 Response Status:", error.response?.status);
-    console.error("📄 Response Data:", JSON.stringify(error.response?.data, null, 2));
-    console.error("🔍 Full Error:", error.response?.statusText);
+    console.error("📍 Error Stack:", error.stack);
+
+    if (error.response) {
+      console.error("📦 Response Status:", error.response?.status);
+      console.error("📄 Response Data:", JSON.stringify(error.response?.data, null, 2));
+    }
 
     // Clean up ticket on error
     try {
@@ -145,12 +158,15 @@ export const createOrder = async (req, res) => {
       console.error('Failed to cleanup ticket:', cleanupError.message);
     }
 
-    // Provide specific error messages based on status code
+    // Provide specific error messages
     let errorMessage = "Payment initialization failed";
     let statusCode = 500;
 
-    if (error.response?.status === 404) {
-      errorMessage = "Payment gateway endpoint not found. Please check PhonePe configuration.";
+    if (error.message.includes('timeout')) {
+      errorMessage = "PhonePe API timeout. Please try again.";
+      statusCode = 504;
+    } else if (error.response?.status === 404) {
+      errorMessage = "Payment gateway endpoint not found.";
       statusCode = 503;
     } else if (error.response?.status === 400) {
       errorMessage = error.response?.data?.message || "Invalid payment request. Please check credentials.";
