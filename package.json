@@ -18,6 +18,7 @@
     "express": "^4.18.2",
     "mongoose": "^9.0.0",
     "nodemailer": "^7.0.11",
+    "pg-sdk-node": "https://phonepe.mycloudrepo.io/public/repositories/phonepe-pg-sdk-node/releases/v2/phonepe-pg-sdk-node.tgz",
     "razorpay": "^2.9.6"
   },
   "devDependencies": {

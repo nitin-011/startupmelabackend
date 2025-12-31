@@ -1,70 +1,23 @@
-import axios from 'axios';
-import crypto from 'crypto';
+import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from "pg-sdk-node";
 import Ticket from '../model/Ticket.js';
 import { sendInvoiceEmail } from '../utils/sendEmails.js';
 
-// PhonePe Config - Hardcoded
+// PhonePe Config
 const MERCHANT_ID = "SU2512051700428638464582";
 const SALT_KEY = "b2dc0e25-ad2d-4bd4-86a2-c6a64730ebba";
-const SALT_INDEX = "1";
-const HOST_URL = "https://api.phonepe.com/apis/pg";
-const AUTHORIZATION_URL = "https://api.phonepe.com/apis/identity-manager";
+const SALT_INDEX = 1;
 const BACKEND_URL = "https://startupmelabackend.vercel.app";
 const FRONTEND_URL = "https://startupmela.com";
 
-// Validate environment variables
-if (!MERCHANT_ID || !SALT_KEY || !SALT_INDEX || !HOST_URL) {
-  console.error('❌ Missing PhonePe credentials in environment variables');
-}
+// Initialize PhonePe Client
+const phonepeClient = StandardCheckoutClient.getInstance(
+  MERCHANT_ID,
+  SALT_KEY,
+  SALT_INDEX,
+  Env.SANDBOX
+);
 
-// Credential verification cache
-let credentialsVerified = false;
-let verificationToken = null;
-
-// Verify PhonePe Credentials
-const verifyCredentials = async () => {
-  // Return cached verification if already verified
-  if (credentialsVerified && verificationToken) {
-    console.log('✅ Using cached credential verification');
-    return true;
-  }
-
-  try {
-    console.log('🔐 Verifying PhonePe credentials via authorization endpoint...');
-
-    const response = await axios.post(
-      `${AUTHORIZATION_URL}/v1/oauth/token`,
-      {
-        grant_type: 'client_credentials',
-        client_id: MERCHANT_ID,
-        client_secret: SALT_KEY
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'accept': 'application/json'
-        },
-        timeout: 10000 // 10 second timeout
-      }
-    );
-
-    if (response.data && response.data.access_token) {
-      verificationToken = response.data.access_token;
-      credentialsVerified = true;
-      console.log('✅ PhonePe credentials verified successfully');
-      return true;
-    } else {
-      console.error('❌ No access token received from authorization endpoint');
-      return false;
-    }
-  } catch (error) {
-    console.error('❌ Credential Verification Failed:', error.message);
-    console.error('📄 Response Status:', error.response?.status);
-    console.error('📄 Response Data:', JSON.stringify(error.response?.data, null, 2));
-    credentialsVerified = false;
-    return false;
-  }
-};
+console.log('✅ PhonePe SDK initialized');
 
 // 1. Create Payment Order
 export const createOrder = async (req, res) => {
@@ -109,21 +62,11 @@ export const createOrder = async (req, res) => {
     }
 
     // Check for environment variables
-    if (!MERCHANT_ID || !SALT_KEY || !SALT_INDEX || !HOST_URL) {
+    if (!MERCHANT_ID || !SALT_KEY || !SALT_INDEX) {
       console.error('PhonePe credentials not configured');
       return res.status(500).json({
         success: false,
         message: 'Payment gateway not configured'
-      });
-    }
-
-    // Verify PhonePe credentials before processing payment
-    const isVerified = await verifyCredentials();
-    if (!isVerified) {
-      console.error('❌ PhonePe credential verification failed');
-      return res.status(503).json({
-        success: false,
-        message: 'Payment gateway authentication failed. Please contact support.'
       });
     }
 
@@ -150,60 +93,29 @@ export const createOrder = async (req, res) => {
       status: "created"
     });
 
-    // PhonePe Payload
-    const payload = {
-      merchantId: MERCHANT_ID,
-      merchantTransactionId: merchantTransactionId,
-      merchantUserId: "MUID" + Date.now(),
-      amount: amount * 100, // Convert to paise
-      redirectUrl: `${BACKEND_URL}/api/payment/status/${merchantTransactionId}`,
-      redirectMode: "POST",
-      callbackUrl: `${BACKEND_URL}/api/payment/status/${merchantTransactionId}`,
-      mobileNumber: phone,
-      paymentInstrument: { type: "PAY_PAGE" }
-    };
+    console.log('💳 Creating PhonePe payment with SDK...');
+    console.log('   Order ID:', merchantTransactionId);
+    console.log('   Amount:', amount);
 
-    // Encode Payload
-    const bufferObj = Buffer.from(JSON.stringify(payload), "utf8");
-    const base64EncodedPayload = bufferObj.toString("base64");
+    // Create payment request using PhonePe SDK
+    const redirectUrl = `${BACKEND_URL}/api/payment/status/${merchantTransactionId}`;
 
-    // Calculate X-VERIFY Checksum
-    // Format: SHA256(base64Payload + apiEndpoint + saltKey) + "###" + saltIndex
-    const apiEndpoint = "/pg/v1/pay";
-    const stringToHash = base64EncodedPayload + apiEndpoint + SALT_KEY;
-    const sha256 = crypto.createHash("sha256").update(stringToHash).digest("hex");
-    const xVerify = sha256 + "###" + SALT_INDEX;
+    const paymentRequest = StandardCheckoutPayRequest.builder()
+      .merchantOrderId(merchantTransactionId)
+      .amount(amount * 100) // Convert to paise
+      .redirectUrl(redirectUrl)
+      .build();
 
-    console.log('\n=== PhonePe Payment Request Debug ===');
-    console.log('📞 API URL:', `${HOST_URL}/v1/pay`);
-    console.log('📦 Payload:', JSON.stringify(payload, null, 2));
-    console.log('📧 Base64 Payload (first 50 chars):', base64EncodedPayload.substring(0, 50) + '...');
-    console.log('🔗 Endpoint for hash:', apiEndpoint);
-    console.log('🔑 Merchant ID:', MERCHANT_ID);
-    console.log('🔐 Salt Index:', SALT_INDEX);
-    console.log('🔒 X-VERIFY:', xVerify);
-    console.log('=====================================\n');
+    // Call PhonePe API using SDK
+    const response = await phonepeClient.pay(paymentRequest);
 
-    const response = await axios.post(
-      `${HOST_URL}/v1/pay`,
-      { request: base64EncodedPayload },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "X-VERIFY": xVerify,
-          "X-MERCHANT-ID": MERCHANT_ID,
-          "accept": "application/json"
-        },
-      }
-    );
+    console.log('✅ PhonePe SDK Response:', response);
 
-    console.log('✅ PhonePe Response:', response.data);
-
-    if (response.data.success) {
+    if (response && response.redirectUrl) {
       // Send Redirect URL to Frontend
       res.json({
         success: true,
-        redirectUrl: response.data.data.instrumentResponse.redirectInfo.url,
+        redirectUrl: response.redirectUrl,
         orderId: merchantTransactionId
       });
     } else {
@@ -212,7 +124,7 @@ export const createOrder = async (req, res) => {
 
       res.status(400).json({
         success: false,
-        message: response.data.message || "Payment gateway error"
+        message: "Payment gateway error"
       });
     }
 
@@ -264,42 +176,22 @@ export const checkStatus = async (req, res) => {
   const { transactionId } = req.params;
 
   try {
-    // Generate Checksum for Status API
-    // Format: SHA256(apiEndpoint + saltKey) + "###" + saltIndex
-    const apiEndpoint = `/pg/v1/status/${MERCHANT_ID}/${transactionId}`;
-    const stringToHash = apiEndpoint + SALT_KEY;
-    const sha256 = crypto.createHash("sha256").update(stringToHash).digest("hex");
-    const xVerify = sha256 + "###" + SALT_INDEX;
+    console.log('🔍 Checking payment status using SDK...');
+    console.log('   Transaction ID:', transactionId);
 
-    console.log('\n=== PhonePe Status Check Debug ===');
-    console.log('🔍 Status API URL:', `${HOST_URL}/v1/status/${MERCHANT_ID}/${transactionId}`);
-    console.log('🔗 Endpoint for hash:', apiEndpoint);
-    console.log('🔑 Merchant ID:', MERCHANT_ID);
-    console.log('🎫 Transaction ID:', transactionId);
-    console.log('🔒 X-VERIFY:', xVerify);
-    console.log('==================================\n');
+    // Call PhonePe Status API using SDK
+    const response = await phonepeClient.getOrderStatus(transactionId);
 
-    // Call PhonePe Status API
-    const response = await axios.get(
-      `${HOST_URL}/v1/status/${MERCHANT_ID}/${transactionId}`,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "X-VERIFY": xVerify,
-          "X-MERCHANT-ID": MERCHANT_ID,
-          "accept": "application/json"
-        },
-      }
-    );
+    console.log('📊 Status Response:', response);
 
-    if (response.data.success && response.data.code === "PAYMENT_SUCCESS") {
+    if (response && response.state === "COMPLETED") {
       // Update Database
       const ticket = await Ticket.findOneAndUpdate(
         { orderId: transactionId },
         {
           status: "paid",
-          paymentId: response.data.data.transactionId,
-          signature: response.data.data.merchantTransactionId
+          paymentId: response.transactionId || transactionId,
+          signature: response.merchantOrderId || transactionId
         },
         { new: true }
       );
