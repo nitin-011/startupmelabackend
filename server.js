@@ -13,7 +13,7 @@ const app = express();
 // -----------------------------------------
 const allowedOrigins = [
   "http://localhost:5173",
-  "http://localhost:3000",
+  "https://startup-mela-beta.vercel.app",
   "https://startupmela.com",
   "https://www.startupmela.com"
 ];
