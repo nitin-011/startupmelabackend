@@ -8,6 +8,7 @@ const MERCHANT_ID = "SU2512051700428638464582";
 const SALT_KEY = "b2dc0e25-ad2d-4bd4-86a2-c6a64730ebba";
 const SALT_INDEX = "1";
 const HOST_URL = "https://api.phonepe.com/apis/pg";
+const AUTHORIZATION_URL = "https://api.phonepe.com/apis/identity-manager";
 const BACKEND_URL = "https://startupmelabackend.vercel.app";
 const FRONTEND_URL = "https://startupmela.com";
 
@@ -15,6 +16,55 @@ const FRONTEND_URL = "https://startupmela.com";
 if (!MERCHANT_ID || !SALT_KEY || !SALT_INDEX || !HOST_URL) {
   console.error('❌ Missing PhonePe credentials in environment variables');
 }
+
+// OAuth Token Cache
+let accessToken = null;
+let tokenExpiry = null;
+
+// Get OAuth Access Token
+const getAccessToken = async () => {
+  try {
+    // Return cached token if still valid (with 5 min buffer)
+    if (accessToken && tokenExpiry && Date.now() < tokenExpiry - 300000) {
+      console.log('✅ Using cached access token');
+      return accessToken;
+    }
+
+    console.log('🔐 Fetching new OAuth token from PhonePe...');
+
+    // Request new token from authorization endpoint
+    const response = await axios.post(
+      `${AUTHORIZATION_URL}/v1/oauth/token`,
+      {
+        grant_type: 'client_credentials',
+        client_id: MERCHANT_ID,
+        client_secret: SALT_KEY
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'accept': 'application/json'
+        }
+      }
+    );
+
+    if (response.data && response.data.access_token) {
+      accessToken = response.data.access_token;
+      // Set expiry (usually 3600 seconds, but use response value if available)
+      const expiresIn = response.data.expires_in || 3600;
+      tokenExpiry = Date.now() + (expiresIn * 1000);
+
+      console.log('✅ New access token obtained, expires in', expiresIn, 'seconds');
+      return accessToken;
+    } else {
+      throw new Error('No access token in response');
+    }
+  } catch (error) {
+    console.error('❌ OAuth Token Error:', error.message);
+    console.error('📄 Response:', error.response?.data);
+    throw new Error('Failed to obtain access token');
+  }
+};
 
 // 1. Create Payment Order
 export const createOrder = async (req, res) => {
@@ -112,6 +162,9 @@ export const createOrder = async (req, res) => {
     const sha256 = crypto.createHash("sha256").update(stringToHash).digest("hex");
     const xVerify = sha256 + "###" + SALT_INDEX;
 
+    // Get OAuth Access Token
+    const token = await getAccessToken();
+
     // Call PhonePe API
     console.log('📞 Calling PhonePe API:', `${HOST_URL}/checkout/v2/pay`);
     console.log('📦 Payload:', JSON.stringify(payload, null, 2));
@@ -124,6 +177,7 @@ export const createOrder = async (req, res) => {
       {
         headers: {
           "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
           "X-VERIFY": xVerify,
           "X-MERCHANT-ID": MERCHANT_ID,
           "accept": "application/json",
@@ -198,17 +252,21 @@ export const checkStatus = async (req, res) => {
   const { transactionId } = req.params;
 
   try {
+    // Get OAuth Access Token
+    const token = await getAccessToken();
+
     // Generate Checksum for Status API
-    const stringToHash = `/checkout/v2/order/${MERCHANT_ID}/${transactionId}/status` + SALT_KEY;
+    const stringToHash = `/checkout/v2/order/${transactionId}/status` + SALT_KEY;
     const sha256 = crypto.createHash("sha256").update(stringToHash).digest("hex");
     const xVerify = sha256 + "###" + SALT_INDEX;
 
     // Call PhonePe Status API
     const response = await axios.get(
-      `${HOST_URL}/checkout/v2/order/${MERCHANT_ID}/${transactionId}/status`,
+      `${HOST_URL}/checkout/v2/order/${transactionId}/status`,
       {
         headers: {
           "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
           "X-MERCHANT-ID": MERCHANT_ID,
           "X-VERIFY": xVerify,
         },
