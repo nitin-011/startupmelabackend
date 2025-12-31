@@ -7,7 +7,7 @@ const CLIENT_ID = "SU2512051700428638464582";
 const CLIENT_SECRET = "b2dc0e25-ad2d-4bd4-86a2-c6a64730ebba";
 const CLIENT_VERSION = 1;
 const BACKEND_URL = "https://startupmelabackend.vercel.app";
-const FRONTEND_URL = "https://startup-mela-beta.vercel.app";
+const FRONTEND_URL = "https://startupmela.com";
 
 console.log('🔐 PhonePe Configuration:');
 console.log('   Client ID:', CLIENT_ID);

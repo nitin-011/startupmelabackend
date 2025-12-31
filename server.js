@@ -9,7 +9,7 @@ const app = express();
 // 1. CORS CONFIGURATION
 // -----------------------------------------
 const corsOptions = {
-  origin: "https://startup-mela-beta.vercel.app",
+  origin: ["https://startupmela.com", "https://www.startupmela.com"],
   credentials: true, // Allow cookies/headers
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
