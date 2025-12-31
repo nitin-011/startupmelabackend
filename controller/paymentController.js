@@ -7,7 +7,7 @@ const CLIENT_ID = "SU2512051700428638464582";
 const CLIENT_SECRET = "b2dc0e25-ad2d-4bd4-86a2-c6a64730ebba";
 const CLIENT_VERSION = 1;
 const BACKEND_URL = "https://startupmelabackend.vercel.app";
-const FRONTEND_URL = "https://startupmela.com";
+const FRONTEND_URL = "https://startup-mela-beta.vercel.app";
 
 console.log('🔐 PhonePe Configuration:');
 console.log('   Client ID:', CLIENT_ID);
@@ -108,7 +108,7 @@ export const createOrder = async (req, res) => {
     console.log('   Phone:', phone);
 
     // Create payment request using PhonePe SDK with all required fields
-    const redirectUrl = `${BACKEND_URL}/api/payment/status/${merchantTransactionId}`;
+    const redirectUrl = `${FRONTEND_URL}/payment-success?id=${merchantTransactionId}`;
     const callbackUrl = `${BACKEND_URL}/api/payment/status/${merchantTransactionId}`;
 
     const paymentRequest = StandardCheckoutPayRequest.builder()
@@ -120,8 +120,8 @@ export const createOrder = async (req, res) => {
       .build();
 
     console.log('📞 Calling PhonePe API...');
-    console.log('   Redirect URL:', redirectUrl);
-    console.log('   Callback URL:', callbackUrl);
+    console.log('   Redirect URL (Frontend):', redirectUrl);
+    console.log('   Callback URL (Backend):', callbackUrl);
 
     // Call PhonePe API using SDK with timeout
     const response = await Promise.race([
