@@ -33,13 +33,28 @@ export const createOrder = async (req, res) => {
   console.log('⏰ Timestamp:', new Date().toISOString());
 
   try {
-    const { name, email, phone, passType, amount, quantity } = req.body;
+    const { name, email, phone, amount, quantity, itemType, passType, stallType, stallId, baseAmount, gstAmount } = req.body;
 
     // Validate required fields
-    if (!name || !email || !phone || !passType || !amount) {
+    if (!name || !email || !phone || !amount) {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields'
+      });
+    }
+
+    // Validate type-specific fields
+    if (itemType === 'stall' && !stallType) {
+      return res.status(400).json({
+        success: false,
+        message: 'Stall type is required for stall bookings'
+      });
+    }
+    
+    if (itemType === 'pass' && !passType) {
+      return res.status(400).json({
+        success: false,
+        message: 'Pass type is required for pass bookings'
       });
     }
 
@@ -92,15 +107,28 @@ export const createOrder = async (req, res) => {
     }
 
     // Save PENDING ticket to Database
-    const newTicket = await Ticket.create({
+    const ticketData = {
       name,
       email,
       phone,
-      passType,
       amount,
+      quantity: quantity || 1,
       orderId: merchantTransactionId,
-      status: "created"
-    });
+      status: "created",
+      itemType: itemType || 'pass'
+    };
+
+    // Add type-specific fields
+    if (itemType === 'stall') {
+      ticketData.stallType = stallType;
+      ticketData.stallId = stallId;
+      ticketData.baseAmount = baseAmount;
+      ticketData.gstAmount = gstAmount;
+    } else {
+      ticketData.passType = passType;
+    }
+
+    const newTicket = await Ticket.create(ticketData);
 
     console.log('💳 Creating PhonePe payment with SDK...');
     console.log('   Order ID:', merchantTransactionId);
