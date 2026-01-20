@@ -1,36 +1,24 @@
 import nodemailer from 'nodemailer';
 
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.hostinger.com',
+  port: 465,
+  secure: true, // Use SSL
   auth: {
-    user: "your-email@gmail.com",
-    pass: "your-gmail-app-password",
+    user: "Contact@startupmela.com",
+    pass: "NitinTanuStartupmela@2026",
   },
 });
 
 export const sendInvoiceEmail = async (ticket) => {
   const isStall = ticket.itemType === 'stall';
   const itemName = isStall ? ticket.stallType : ticket.passType;
-  const subject = isStall 
-    ? `Stall Booking Confirmed: ${ticket.stallType}` 
+  const subject = isStall
+    ? `Stall Booking Confirmed: ${ticket.stallType}`
     : `Ticket Confirmed: ${ticket.passType}`;
 
-  let gstBreakdown = '';
-  if (isStall) {
-    gstBreakdown = `
-      <tr>
-        <td style="padding: 8px; border-bottom: 1px solid #eee;">Base Amount:</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">₹${ticket.baseAmount?.toLocaleString('en-IN') || '0'}</td>
-      </tr>
-      <tr>
-        <td style="padding: 8px; border-bottom: 1px solid #eee;">GST (18%):</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">₹${ticket.gstAmount?.toLocaleString('en-IN') || '0'}</td>
-      </tr>
-    `;
-  }
-
   const mailOptions = {
-    from: `"Startup Mela" <your-email@gmail.com>`,
+    from: `"Startup Mela" <Contact@startupmela.com>`,
     to: ticket.email,
     subject: subject,
     html: `
@@ -38,64 +26,99 @@ export const sendInvoiceEmail = async (ticket) => {
       <html>
       <head>
         <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { background: linear-gradient(135deg, #00C2FF 0%, #0070FF 50%, #00E29B 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
-          .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
-          .details { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
-          .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-          table { width: 100%; border-collapse: collapse; }
-          .total-row { font-weight: bold; font-size: 18px; }
+          body { 
+            font-family: Arial, sans-serif; 
+            line-height: 1.6; 
+            color: #333; 
+            margin: 0;
+            padding: 0;
+          }
+          .container { 
+            max-width: 600px; 
+            margin: 0 auto; 
+            padding: 20px; 
+          }
+          .header { 
+            background: linear-gradient(135deg, #00C2FF 0%, #0070FF 50%, #00E29B 100%); 
+            color: white; 
+            padding: 30px; 
+            text-align: center; 
+            border-radius: 10px 10px 0 0; 
+          }
+          .content { 
+            background: #f9f9f9; 
+            padding: 30px; 
+            border-radius: 0 0 10px 10px; 
+          }
+          .greeting {
+            font-size: 16px;
+            margin-bottom: 20px;
+          }
+          .code-box {
+            background: white;
+            border: 3px solid #0070FF;
+            border-radius: 12px;
+            padding: 25px;
+            text-align: center;
+            margin: 25px 0;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+          }
+          .code-label {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+          }
+          .code {
+            font-size: 32px;
+            font-weight: bold;
+            color: #0070FF;
+            letter-spacing: 4px;
+            font-family: 'Courier New', monospace;
+          }
+          .instructions {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+          }
+          .footer { 
+            text-align: center; 
+            padding: 20px; 
+            color: #666; 
+            font-size: 12px; 
+          }
         </style>
       </head>
       <body>
         <div class="container">
           <div class="header">
-            <h1>🎉 Payment Successful!</h1>
+            <h1 style="margin: 0;">🎉 Registration Confirmed!</h1>
           </div>
           <div class="content">
-            <p>Hi <strong>${ticket.name}</strong>,</p>
-            <p>${isStall ? 'Your exhibition stall booking' : 'Your ticket'} for <strong>${itemName}</strong> has been confirmed.</p>
+            <p class="greeting">Dear <strong>${ticket.name}</strong>,</p>
             
-            <div class="details">
-              <h3>${isStall ? '📦 Stall Booking Details' : '🎫 Ticket Details'}</h3>
-              <table>
-                <tr>
-                  <td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Order ID:</strong></td>
-                  <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${ticket.orderId}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>${isStall ? 'Stall Type:' : 'Pass Type:'}</strong></td>
-                  <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${itemName}</td>
-                </tr>
-                ${ticket.quantity > 1 ? `
-                <tr>
-                  <td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Quantity:</strong></td>
-                  <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${ticket.quantity}</td>
-                </tr>
-                ` : ''}
-                ${gstBreakdown}
-                <tr class="total-row">
-                  <td style="padding: 12px 8px;">Total Amount Paid:</td>
-                  <td style="padding: 12px 8px; text-align: right; color: #0070FF;">₹${ticket.amount?.toLocaleString('en-IN')}</td>
-                </tr>
-              </table>
+            <p>Thank you for confirming your presence for <strong>STARTUP MELA 2026</strong> scheduled on <strong>28th February and 1st March 2026</strong>.</p>
+            
+            <div class="code-box">
+              <div class="code-label">Your Unique Registration Code</div>
+              <div class="code">${ticket.verificationCode}</div>
             </div>
-
-            ${isStall ? `
-            <div style="background: #fff3cd; padding: 15px; border-radius: 8px; border-left: 4px solid #ffc107; margin: 20px 0;">
-              <p style="margin: 0;"><strong>📍 Next Steps:</strong></p>
+            
+            <div class="instructions">
+              <p style="margin: 0;"><strong>⚠️ Important Instructions:</strong></p>
               <ul style="margin: 10px 0;">
-                <li>Our team will contact you within 24 hours</li>
-                <li>Stall location will be assigned on first-come, first-served basis</li>
-                <li>Setup guidelines will be shared via email</li>
+                <li>Kindly show this code at the entrance on your arrival</li>
+                <li>Please don't share this code with anyone</li>
+                <li>Save this email for reference</li>
               </ul>
             </div>
-            ` : `
-            <p style="margin: 20px 0;">Please save this email as proof of purchase. Show this confirmation at the venue for entry.</p>
-            `}
-
-            <p style="margin: 20px 0 0 0;">See you at <strong>Startup Mela 2026</strong>! 🚀</p>
+            
+            <p style="margin-top: 25px;">We look forward to seeing you at the event!</p>
+            
+            <p style="margin-top: 30px;">Thank You,<br><strong>Startup Mela 2026</strong></p>
           </div>
           <div class="footer">
             <p>Questions? Contact us at contact@startupmela.com or call 7743096565</p>

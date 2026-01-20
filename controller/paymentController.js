@@ -24,23 +24,86 @@ const phonepeClient = StandardCheckoutClient.getInstance(
 
 console.log('✅ PhonePe SDK initialized');
 
+// Helper function to generate 9-digit verification code
+const generateVerificationCode = () => {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let code = '';
+  for (let i = 0; i < 9; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+};
+
 // 1. Create Payment Order
 export const createOrder = async (req, res) => {
   let merchantTransactionId = null;
+  const createdTickets = [];
 
   console.log('\n🚀 === Payment Request Received ===');
   console.log('📥 Request Body:', JSON.stringify(req.body, null, 2));
   console.log('⏰ Timestamp:', new Date().toISOString());
 
   try {
-    const { name, email, phone, amount, quantity, itemType, passType, stallType, stallId, baseAmount, gstAmount } = req.body;
+    const { attendees, amount, quantity, itemType, passType, passId, stallType, stallId, baseAmount, gstAmount } = req.body;
 
-    // Validate required fields
-    if (!name || !email || !phone || !amount) {
+    // Validate attendees array
+    if (!attendees || !Array.isArray(attendees) || attendees.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields'
+        message: 'Attendees array is required and must contain at least one attendee'
       });
+    }
+
+    if (attendees.length > 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'Maximum 5 tickets can be booked at once'
+      });
+    }
+
+    // Validate quantity matches attendees length
+    if (quantity !== attendees.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Quantity must match number of attendees'
+      });
+    }
+
+    // Validate each attendee
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const phoneRegex = /^[6-9]\d{9}$/;
+
+    for (let i = 0; i < attendees.length; i++) {
+      const attendee = attendees[i];
+
+      if (!attendee.name || !attendee.email || !attendee.phone || !attendee.profession) {
+        return res.status(400).json({
+          success: false,
+          message: `Attendee ${i + 1}: Missing required fields (name, email, phone, profession)`
+        });
+      }
+
+      if (!emailRegex.test(attendee.email)) {
+        return res.status(400).json({
+          success: false,
+          message: `Attendee ${i + 1}: Invalid email format`
+        });
+      }
+
+      const cleanPhone = attendee.phone.replace(/[\s+\-()]/g, '');
+      if (!phoneRegex.test(cleanPhone.slice(-10))) {
+        return res.status(400).json({
+          success: false,
+          message: `Attendee ${i + 1}: Invalid phone number`
+        });
+      }
+
+      if (attendee.profession === 'Others' && !attendee.professionOther) {
+        return res.status(400).json({
+          success: false,
+          message: `Attendee ${i + 1}: Please specify profession when selecting "Others"`
+        });
+      }
     }
 
     // Validate type-specific fields
@@ -50,30 +113,11 @@ export const createOrder = async (req, res) => {
         message: 'Stall type is required for stall bookings'
       });
     }
-    
+
     if (itemType === 'pass' && !passType) {
       return res.status(400).json({
         success: false,
         message: 'Pass type is required for pass bookings'
-      });
-    }
-
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid email format'
-      });
-    }
-
-    // Validate phone format (Indian)
-    const phoneRegex = /^[6-9]\d{9}$/;
-    const cleanPhone = phone.replace(/[\s+\-()]/g, '');
-    if (!phoneRegex.test(cleanPhone.slice(-10))) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid phone number'
       });
     }
 
@@ -106,37 +150,53 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    // Save PENDING ticket to Database
-    const ticketData = {
-      name,
-      email,
-      phone,
-      amount,
-      quantity: quantity || 1,
-      orderId: merchantTransactionId,
-      status: "created",
-      itemType: itemType || 'pass'
-    };
+    console.log('💳 Creating tickets for', attendees.length, 'attendee(s)...');
+    console.log('   Order ID:', merchantTransactionId);
 
-    // Add type-specific fields
-    if (itemType === 'stall') {
-      ticketData.stallType = stallType;
-      ticketData.stallId = stallId;
-      ticketData.baseAmount = baseAmount;
-      ticketData.gstAmount = gstAmount;
-    } else {
-      ticketData.passType = passType;
+    // Create separate ticket document for each attendee
+    const isGroupBooking = attendees.length > 1;
+
+    for (let i = 0; i < attendees.length; i++) {
+      const attendee = attendees[i];
+      const verificationCode = generateVerificationCode();
+
+      const ticketData = {
+        name: attendee.name,
+        email: attendee.email,
+        phone: attendee.phone,
+        profession: attendee.profession,
+        professionOther: attendee.professionOther || null,
+        amount: amount, // Total amount for the entire booking (same for all tickets)
+        quantity: quantity, // Total quantity (same for all tickets)
+        orderId: merchantTransactionId,
+        status: "created",
+        itemType: itemType || 'pass',
+        verificationCode: verificationCode,
+        groupBooking: isGroupBooking,
+        primaryContact: i === 0 // First attendee is the primary contact
+      };
+
+      // Add type-specific fields
+      if (itemType === 'stall') {
+        ticketData.stallType = stallType;
+        ticketData.stallId = stallId;
+        ticketData.baseAmount = baseAmount;
+        ticketData.gstAmount = gstAmount;
+      } else {
+        ticketData.passType = passType;
+        ticketData.passId = passId;
+      }
+
+      const newTicket = await Ticket.create(ticketData);
+      createdTickets.push(newTicket);
+      console.log(`   ✓ Created ticket ${i + 1}/${attendees.length} - Code: ${verificationCode}`);
     }
 
-    const newTicket = await Ticket.create(ticketData);
-
     console.log('💳 Creating PhonePe payment with SDK...');
-    console.log('   Order ID:', merchantTransactionId);
-    console.log('   Amount:', amount);
-    console.log('   Phone:', phone);
+    console.log('   Total Amount:', amount);
 
     // Create payment request using PhonePe SDK
-    const redirectUrl = `${FRONTEND_URL}/payment-success?id=${merchantTransactionId}`;
+    const redirectUrl = `${FRONTEND_URL}/checkout?paymentStatus=success&orderId=${merchantTransactionId}${passId ? `&passId=${passId}` : ''}${stallId ? `&stallId=${stallId}` : ''}`;
 
     const paymentRequest = StandardCheckoutPayRequest.builder()
       .merchantOrderId(merchantTransactionId)
@@ -162,11 +222,13 @@ export const createOrder = async (req, res) => {
       return res.json({
         success: true,
         redirectUrl: response.redirectUrl,
-        orderId: merchantTransactionId
+        orderId: merchantTransactionId,
+        ticketCount: createdTickets.length
       });
     } else {
-      // Delete the pending ticket if PhonePe fails
-      await Ticket.findOneAndDelete({ orderId: merchantTransactionId });
+      // Delete all created tickets if PhonePe fails
+      await Ticket.deleteMany({ orderId: merchantTransactionId });
+      console.log('🗑️ Rolled back all tickets due to PhonePe failure');
 
       return res.status(400).json({
         success: false,
@@ -183,14 +245,14 @@ export const createOrder = async (req, res) => {
       console.error("📄 Response Data:", JSON.stringify(error.response?.data, null, 2));
     }
 
-    // Clean up ticket on error
+    // Clean up all tickets on error
     try {
       if (merchantTransactionId) {
-        await Ticket.findOneAndDelete({ orderId: merchantTransactionId });
-        console.log('🗑️ Cleaned up failed ticket:', merchantTransactionId);
+        const deletedCount = await Ticket.deleteMany({ orderId: merchantTransactionId });
+        console.log(`🗑️ Cleaned up ${deletedCount.deletedCount} failed ticket(s):`, merchantTransactionId);
       }
     } catch (cleanupError) {
-      console.error('Failed to cleanup ticket:', cleanupError.message);
+      console.error('Failed to cleanup tickets:', cleanupError.message);
     }
 
     // Provide specific error messages
@@ -222,7 +284,7 @@ export const createOrder = async (req, res) => {
   }
 };
 
-// 2. Check Status (Callback from PhonePe)
+// 2. Check Status (AJAX endpoint for frontend verification)
 export const checkStatus = async (req, res) => {
   const { transactionId } = req.params;
 
@@ -236,48 +298,82 @@ export const checkStatus = async (req, res) => {
     console.log('📊 Status Response:', response);
 
     if (response && response.state === "COMPLETED") {
-      // Update Database
-      const ticket = await Ticket.findOneAndUpdate(
+      // Find ALL tickets with this orderId
+      const tickets = await Ticket.find({ orderId: transactionId });
+
+      if (!tickets || tickets.length === 0) {
+        console.error(`No tickets found for orderId: ${transactionId}`);
+        return res.status(404).json({
+          success: false,
+          message: "Tickets not found"
+        });
+      }
+
+      // Update ALL tickets to paid status
+      await Ticket.updateMany(
         { orderId: transactionId },
         {
           status: "paid",
           paymentId: response.transactionId || transactionId,
           signature: response.merchantOrderId || transactionId
-        },
-        { new: true }
+        }
       );
 
-      // Check if ticket was found and updated
-      if (!ticket) {
-        console.error(`Ticket not found for orderId: ${transactionId}`);
-        return res.redirect(`${FRONTEND_URL}/payment-failed?error=ticket_not_found`);
+      console.log(`✅ Updated ${tickets.length} ticket(s) to paid status`);
+
+      // Send individual email to each attendee
+      for (const ticket of tickets) {
+        try {
+          await sendInvoiceEmail(ticket);
+          console.log(`📧 Email sent to ${ticket.email}`);
+        } catch (emailError) {
+          console.error(`Email sending failed for ${ticket.email}:`, emailError.message);
+          // Don't fail the payment if email fails
+        }
       }
 
-      // Send Email
-      try {
-        await sendInvoiceEmail(ticket);
-      } catch (emailError) {
-        console.error("Email sending failed:", emailError.message);
-        // Don't fail the payment if email fails
-      }
-
-      // Redirect User to Frontend Success Page
-      res.redirect(`${FRONTEND_URL}/payment-success?id=${transactionId}`);
+      // Return success response with all ticket details
+      return res.json({
+        success: true,
+        message: "Payment verified successfully",
+        tickets: tickets.map(ticket => ({
+          orderId: ticket.orderId,
+          name: ticket.name,
+          email: ticket.email,
+          phone: ticket.phone,
+          profession: ticket.profession,
+          itemType: ticket.itemType,
+          passType: ticket.passType,
+          stallType: ticket.stallType,
+          verificationCode: ticket.verificationCode,
+          amount: ticket.amount,
+          quantity: ticket.quantity,
+          status: ticket.status,
+          groupBooking: ticket.groupBooking,
+          primaryContact: ticket.primaryContact,
+          createdAt: ticket.createdAt
+        }))
+      });
     } else {
-      // Update DB to Failed
-      await Ticket.findOneAndUpdate(
+      // Update ALL tickets to Failed
+      await Ticket.updateMany(
         { orderId: transactionId },
         { status: "failed" }
       );
-      res.redirect(`${FRONTEND_URL}/payment-failed`);
+
+      return res.json({
+        success: false,
+        message: "Payment verification failed",
+        status: response?.state || "UNKNOWN"
+      });
     }
 
   } catch (error) {
     console.error("Status Check Error:", error.message);
 
-    // Try to update ticket status to failed if it exists
+    // Try to update all tickets status to failed if they exist
     try {
-      await Ticket.findOneAndUpdate(
+      await Ticket.updateMany(
         { orderId: transactionId },
         { status: "failed" }
       );
@@ -285,6 +381,10 @@ export const checkStatus = async (req, res) => {
       console.error("Failed to update ticket status:", dbError.message);
     }
 
-    res.redirect(`${FRONTEND_URL}/payment-failed?id=${transactionId}`);
+    return res.status(500).json({
+      success: false,
+      message: "Error verifying payment status",
+      error: error.message
+    });
   }
 };
