@@ -201,14 +201,16 @@ export const createTestOrder = async (req, res) => {
 
         // Send emails to all attendees
         console.log('📧 Sending confirmation emails...');
-        for (const ticket of createdTickets) {
+        // Send emails to all attendees
+        console.log('📧 Sending confirmation emails...');
+        await Promise.all(createdTickets.map(async (ticket) => {
             try {
                 await sendInvoiceEmail(ticket);
                 console.log(`   ✓ Email sent to ${ticket.email}`);
             } catch (emailError) {
                 console.error(`   ✗ Email failed for ${ticket.email}:`, emailError.message);
             }
-        }
+        }));
 
         // Return success with redirect URL (simulated)
         const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';

@@ -11,7 +11,11 @@
     "PHONEPE_DEV_SALT_KEY": "NzRmZmQ2YjEtMjYxOS00MDcwLWJlM2EtNmRkYTBjZDg4Y2Uw",
     "PHONEPE_DEV_SALT_INDEX": "1",
     "BACKEND_URL": "https://startupmelabackend.vercel.app",
-    "FRONTEND_URL": "https://startupmela.com"
+    "FRONTEND_URL": "https://startupmela.com",
+    "SMTP_HOST": "smtp.hostinger.com",
+    "SMTP_PORT": "465",
+    "SMTP_USER": "Contact@startupmela.com",
+    "SMTP_PASS": "NitinTanuStartupmela@2026"
   },
   "builds": [
     {

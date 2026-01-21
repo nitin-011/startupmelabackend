@@ -370,7 +370,8 @@ export const checkStatus = async (req, res) => {
       console.log(`✅ Updated ${tickets.length} ticket(s) to paid status`);
 
       // Send individual email to each attendee
-      for (const ticket of tickets) {
+      // Send email to each attendee in parallel to save time
+      await Promise.all(tickets.map(async (ticket) => {
         try {
           await sendInvoiceEmail(ticket);
           console.log(`📧 Email sent to ${ticket.email}`);
@@ -378,7 +379,7 @@ export const checkStatus = async (req, res) => {
           console.error(`Email sending failed for ${ticket.email}:`, emailError.message);
           // Don't fail the payment if email fails
         }
-      }
+      }));
 
       // Return success response with all ticket details
       return res.json({
