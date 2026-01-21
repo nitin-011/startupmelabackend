@@ -1,7 +1,7 @@
 {
   "version": 2,
   "env": {
-    "NODE_ENV": "development",
+    "NODE_ENV": "production",
     "MONGO_URI": "mongodb+srv://chalananitin161_db_user:Bj2nRmzcON7og2xD@cluster0.accdd74.mongodb.net/startupmela?retryWrites=true&w=majority",
     "JWT_SECRET": "$2a$12$PfqgetDIrp5GFMgXVnnn4.us63wSn5Y7nCoDSawX0peVQ0kYfWDHC",
     "PHONEPE_PROD_MERCHANT_ID": "SU2512051700428638464582",
