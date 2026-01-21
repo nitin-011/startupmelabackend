@@ -1,9 +1,9 @@
 {
   "version": 2,
   "env": {
-    "NODE_ENV": "production",
+    "NODE_ENV": "development",
     "MONGO_URI": "mongodb+srv://chalananitin161_db_user:Bj2nRmzcON7og2xD@cluster0.accdd74.mongodb.net/startupmela?retryWrites=true&w=majority",
-    "JWT_SECRET": "your-super-secret-jwt-key-change-this-in-production",
+    "JWT_SECRET": "$2a$12$PfqgetDIrp5GFMgXVnnn4.us63wSn5Y7nCoDSawX0peVQ0kYfWDHC",
     "PHONEPE_PROD_MERCHANT_ID": "SU2512051700428638464582",
     "PHONEPE_PROD_SALT_KEY": "b2dc0e25-ad2d-4bd4-86a2-c6a64730ebba",
     "PHONEPE_PROD_SALT_INDEX": "1",
