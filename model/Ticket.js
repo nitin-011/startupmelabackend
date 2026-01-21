@@ -27,10 +27,15 @@ const ticketSchema = new mongoose.Schema({
 
   // New fields for multi-attendee support
   verificationCode: { type: String, required: true }, // 9-digit alphanumeric code for check-in
-  profession: { type: String, required: true }, // Attendee's profession
+  profession: { type: String }, // Attendee's profession (Required for Passes)
   professionOther: { type: String }, // Custom profession if "Others" selected
+  startupName: { type: String }, // Startup Name (Required for Stalls)
   groupBooking: { type: Boolean, default: false }, // True if part of multi-ticket booking
   primaryContact: { type: Boolean, default: false }, // True for the person who made the payment
+
+  // Check-in tracking
+  checkedIn: { type: Boolean, default: false }, // Whether ticket has been used for entry
+  checkInTime: { type: Date }, // Timestamp of when ticket was checked in
 }, { timestamps: true });
 
 const Ticket = mongoose.model('Ticket', ticketSchema);

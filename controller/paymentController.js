@@ -1,25 +1,42 @@
 import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from "pg-sdk-node";
 import Ticket from '../model/Ticket.js';
 import { sendInvoiceEmail } from '../utils/sendEmails.js';
+import dotenv from 'dotenv';
 
-// PhonePe Config
-const CLIENT_ID = "SU2512051700428638464582";
-const CLIENT_SECRET = "b2dc0e25-ad2d-4bd4-86a2-c6a64730ebba";
-const CLIENT_VERSION = 1;
-const BACKEND_URL = "https://startupmelabackend.vercel.app";
-const FRONTEND_URL = "https://startupmela.com";
+dotenv.config();
+
+// Environment Configuration
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const IS_PRODUCTION = NODE_ENV === 'production';
+
+// PhonePe Config - Select based on environment
+const CLIENT_ID = IS_PRODUCTION
+  ? process.env.PHONEPE_PROD_MERCHANT_ID
+  : process.env.PHONEPE_DEV_MERCHANT_ID;
+
+const CLIENT_SECRET = IS_PRODUCTION
+  ? process.env.PHONEPE_PROD_SALT_KEY
+  : process.env.PHONEPE_DEV_SALT_KEY;
+
+const CLIENT_VERSION = IS_PRODUCTION
+  ? parseInt(process.env.PHONEPE_PROD_SALT_INDEX)
+  : parseInt(process.env.PHONEPE_DEV_SALT_INDEX);
+
+const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:5000";
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
 console.log('🔐 PhonePe Configuration:');
+console.log('   Environment:', NODE_ENV.toUpperCase());
 console.log('   Client ID:', CLIENT_ID);
 console.log('   Client Version:', CLIENT_VERSION);
-console.log('   Environment: PRODUCTION');
+console.log('   Mode:', IS_PRODUCTION ? 'PRODUCTION' : 'DEVELOPMENT');
 
 // Initialize PhonePe Client
 const phonepeClient = StandardCheckoutClient.getInstance(
   CLIENT_ID,
   CLIENT_SECRET,
   CLIENT_VERSION,
-  Env.PRODUCTION
+  IS_PRODUCTION ? Env.PRODUCTION : Env.PRODUCTION // PhonePe SDK uses same env for both
 );
 
 console.log('✅ PhonePe SDK initialized');
@@ -76,33 +93,63 @@ export const createOrder = async (req, res) => {
     for (let i = 0; i < attendees.length; i++) {
       const attendee = attendees[i];
 
-      if (!attendee.name || !attendee.email || !attendee.phone || !attendee.profession) {
+      // Validate common required fields
+      if (!attendee.name || !attendee.email || !attendee.phone) {
         return res.status(400).json({
           success: false,
-          message: `Attendee ${i + 1}: Missing required fields (name, email, phone, profession)`
+          message: `Attendee ${i + 1}: Missing required fields (name, email, phone)`
         });
       }
 
-      if (!emailRegex.test(attendee.email)) {
+      // Validate name length
+      if (attendee.name.trim().length < 2) {
         return res.status(400).json({
           success: false,
-          message: `Attendee ${i + 1}: Invalid email format`
+          message: `Attendee ${i + 1}: Name must be at least 2 characters long`
         });
       }
 
+      // Validate email format
+      if (!emailRegex.test(attendee.email.trim())) {
+        return res.status(400).json({
+          success: false,
+          message: `Attendee ${i + 1}: Invalid email address format`
+        });
+      }
+
+      // Validate phone format
       const cleanPhone = attendee.phone.replace(/[\s+\-()]/g, '');
       if (!phoneRegex.test(cleanPhone.slice(-10))) {
         return res.status(400).json({
           success: false,
-          message: `Attendee ${i + 1}: Invalid phone number`
+          message: `Attendee ${i + 1}: Invalid phone number. Must be a valid 10-digit Indian mobile number starting with 6-9`
         });
       }
 
-      if (attendee.profession === 'Others' && !attendee.professionOther) {
-        return res.status(400).json({
-          success: false,
-          message: `Attendee ${i + 1}: Please specify profession when selecting "Others"`
-        });
+      // Type-specific validation
+      if (itemType === 'stall') {
+        // For stalls: require startupName only
+        if (!attendee.startupName || !attendee.startupName.trim()) {
+          return res.status(400).json({
+            success: false,
+            message: `Attendee ${i + 1}: Startup Name is required for stall bookings`
+          });
+        }
+      } else if (itemType === 'pass') {
+        // For passes: require profession (and professionOther if "Others" selected)
+        if (!attendee.profession || !attendee.profession.trim()) {
+          return res.status(400).json({
+            success: false,
+            message: `Attendee ${i + 1}: Profession is required for pass bookings`
+          });
+        }
+
+        if (attendee.profession === 'Others' && (!attendee.professionOther || !attendee.professionOther.trim())) {
+          return res.status(400).json({
+            success: false,
+            message: `Attendee ${i + 1}: Please specify your profession when selecting "Others"`
+          });
+        }
       }
     }
 
@@ -166,6 +213,7 @@ export const createOrder = async (req, res) => {
         phone: attendee.phone,
         profession: attendee.profession,
         professionOther: attendee.professionOther || null,
+        startupName: attendee.startupName || null,
         amount: amount, // Total amount for the entire booking (same for all tickets)
         quantity: quantity, // Total quantity (same for all tickets)
         orderId: merchantTransactionId,

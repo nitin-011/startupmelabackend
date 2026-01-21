@@ -1,4 +1,4 @@
-import app from "./server.js";
+import app from "./server.js"; // Force restart
 
 const PORT = process.env.PORT || 5000;
 

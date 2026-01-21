@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import connectDB from "./config/db.js";
 import apiRouter from "./routes/apiRoutes.js";
+import adminRouter from "./routes/adminRoutes.js";
 
 const app = express();
 
@@ -9,7 +10,12 @@ const app = express();
 // 1. CORS CONFIGURATION
 // -----------------------------------------
 const corsOptions = {
-  origin: ["https://startupmela.com", "https://www.startupmela.com"],
+  origin: [
+    "https://startupmela.com",
+    "https://www.startupmela.com",
+    "http://localhost:5173", // For local development
+    "http://localhost:3000"
+  ],
   credentials: true, // Allow cookies/headers
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
@@ -43,6 +49,7 @@ app.use(async (req, res, next) => {
 // 3. ROUTES
 // -----------------------------------------
 app.use("/api", apiRouter);
+app.use("/api/admin", adminRouter);
 
 app.get("/api/health", (req, res) => {
   res.json({
