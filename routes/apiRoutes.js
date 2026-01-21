@@ -14,7 +14,7 @@ router.post("/contact", submitInquiry);
 
 // Payment Routes
 router.post("/payment/create", createOrder);
-router.post("/payment/status/:transactionId", checkStatus);
+router.get("/payment/status/:transactionId", checkStatus);
 
 // TEST MODE: Payment route without actual gateway
 router.post("/payment/test", createTestOrder);
