@@ -19,4 +19,8 @@ router.get("/payment/status/:transactionId", checkStatus);
 // TEST MODE: Payment route without actual gateway
 router.post("/payment/test", createTestOrder);
 
+// DEBUG: Email Test Route
+import { sendTestEmail } from "../controller/testEmailController.js";
+router.post("/debug/email", sendTestEmail);
+
 export default router;
