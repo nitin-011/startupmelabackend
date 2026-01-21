@@ -1,5 +1,6 @@
 import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from "pg-sdk-node";
 import Ticket from '../model/Ticket.js';
+import PendingTicket from '../model/PendingTicket.js';
 import { sendInvoiceEmail } from '../utils/sendEmails.js';
 import dotenv from 'dotenv';
 
@@ -188,8 +189,8 @@ export const createOrder = async (req, res) => {
     // Generate unique Transaction ID with better randomness
     merchantTransactionId = `MT${Date.now()}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
-    // Check if order already exists
-    const existingOrder = await Ticket.findOne({ orderId: merchantTransactionId });
+    // Check if order already exists in PendingTicket
+    const existingOrder = await PendingTicket.findOne({ orderId: merchantTransactionId });
     if (existingOrder) {
       return res.status(409).json({
         success: false,
@@ -197,7 +198,7 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    console.log('💳 Creating tickets for', attendees.length, 'attendee(s)...');
+    console.log('💳 Creating PENDING tickets for', attendees.length, 'attendee(s)...');
     console.log('   Order ID:', merchantTransactionId);
 
     // Create separate ticket document for each attendee
@@ -235,9 +236,10 @@ export const createOrder = async (req, res) => {
         ticketData.passId = passId;
       }
 
-      const newTicket = await Ticket.create(ticketData);
+      // Save to PendingTicket instead of Ticket
+      const newTicket = await PendingTicket.create(ticketData);
       createdTickets.push(newTicket);
-      console.log(`   ✓ Created ticket ${i + 1}/${attendees.length} - Code: ${verificationCode}`);
+      console.log(`   ✓ Created pending ticket ${i + 1}/${attendees.length} - Code: ${verificationCode}`);
     }
 
     console.log('💳 Creating PhonePe payment with SDK...');
@@ -274,9 +276,9 @@ export const createOrder = async (req, res) => {
         ticketCount: createdTickets.length
       });
     } else {
-      // Delete all created tickets if PhonePe fails
-      await Ticket.deleteMany({ orderId: merchantTransactionId });
-      console.log('🗑️ Rolled back all tickets due to PhonePe failure');
+      // Delete all created pending tickets if PhonePe fails
+      await PendingTicket.deleteMany({ orderId: merchantTransactionId });
+      console.log('🗑️ Rolled back all pending tickets due to PhonePe failure');
 
       return res.status(400).json({
         success: false,
@@ -293,11 +295,11 @@ export const createOrder = async (req, res) => {
       console.error("📄 Response Data:", JSON.stringify(error.response?.data, null, 2));
     }
 
-    // Clean up all tickets on error
+    // Clean up all pending tickets on error
     try {
       if (merchantTransactionId) {
-        const deletedCount = await Ticket.deleteMany({ orderId: merchantTransactionId });
-        console.log(`🗑️ Cleaned up ${deletedCount.deletedCount} failed ticket(s):`, merchantTransactionId);
+        const deletedCount = await PendingTicket.deleteMany({ orderId: merchantTransactionId });
+        console.log(`🗑️ Cleaned up ${deletedCount.deletedCount} failed pending ticket(s):`, merchantTransactionId);
       }
     } catch (cleanupError) {
       console.error('Failed to cleanup tickets:', cleanupError.message);
@@ -346,32 +348,58 @@ export const checkStatus = async (req, res) => {
     console.log('📊 Status Response:', response);
 
     if (response && response.state === "COMPLETED") {
-      // Find ALL tickets with this orderId
-      const tickets = await Ticket.find({ orderId: transactionId });
 
-      if (!tickets || tickets.length === 0) {
-        console.error(`No tickets found for orderId: ${transactionId}`);
-        return res.status(404).json({
-          success: false,
-          message: "Tickets not found"
-        });
+      // 1. Look for pending tickets first
+      let activeTickets = await PendingTicket.find({ orderId: transactionId });
+      let wasPending = true;
+
+      // 2. If not found in pending, check if they are already confirmed in Ticket collection (Idempotency)
+      if (!activeTickets || activeTickets.length === 0) {
+        console.log('⚠️ Not found in PendingTicket, checking main Ticket collection (Idempotency check)...');
+        activeTickets = await Ticket.find({ orderId: transactionId });
+        wasPending = false;
+
+        if (!activeTickets || activeTickets.length === 0) {
+          console.error(`❌ No tickets found anywhere for orderId: ${transactionId}`);
+          return res.status(404).json({
+            success: false,
+            message: "Tickets not found"
+          });
+        }
       }
 
-      // Update ALL tickets to paid status
-      await Ticket.updateMany(
-        { orderId: transactionId },
-        {
-          status: "paid",
-          paymentId: response.transactionId || transactionId,
-          signature: response.merchantOrderId || transactionId
+      // 3. Convert pending tickets to permanent tickets
+      let finalTickets = [];
+
+      if (wasPending) {
+        console.log(`✅ Converting ${activeTickets.length} pending tickets to permanent...`);
+
+        for (const pendingTicket of activeTickets) {
+          const ticketData = pendingTicket.toObject();
+          delete ticketData._id; // Remove _id to create new one (or keep it, but safer to let Mongo generate)
+          delete ticketData.__v;
+
+          ticketData.status = "paid";
+          ticketData.paymentId = response.transactionId || transactionId;
+          ticketData.signature = response.merchantOrderId || transactionId;
+
+          const newTicket = await Ticket.create(ticketData);
+          finalTickets.push(newTicket);
         }
-      );
 
-      console.log(`✅ Updated ${tickets.length} ticket(s) to paid status`);
+        // Delete from PendingTicket
+        await PendingTicket.deleteMany({ orderId: transactionId });
+        console.log('🗑️ Removed processed tickets from PendingTicket collection');
+      } else {
+        // Already verified tickets
+        finalTickets = activeTickets;
+        console.log('✅ Tickets were already verified previously.');
+      }
 
-      // Send individual email to each attendee
+      console.log(`✅ Successfully returned ${finalTickets.length} confirmed tickets`);
+
       // Send email to each attendee in parallel to save time
-      await Promise.all(tickets.map(async (ticket) => {
+      await Promise.all(finalTickets.map(async (ticket) => {
         try {
           await sendInvoiceEmail(ticket);
           console.log(`📧 Email sent to ${ticket.email}`);
@@ -385,7 +413,7 @@ export const checkStatus = async (req, res) => {
       return res.json({
         success: true,
         message: "Payment verified successfully",
-        tickets: tickets.map(ticket => ({
+        tickets: finalTickets.map(ticket => ({
           orderId: ticket.orderId,
           name: ticket.name,
           email: ticket.email,
@@ -404,8 +432,13 @@ export const checkStatus = async (req, res) => {
         }))
       });
     } else {
-      // Update ALL tickets to Failed
-      await Ticket.updateMany(
+      // Payment Failed or Pending
+      // Update pending tickets status to failed (so they don't look like they are just waiting)
+      // They will eventually expire via TTL
+
+      console.log(`❌ Payment not completed. Status: ${response?.state}`);
+
+      await PendingTicket.updateMany(
         { orderId: transactionId },
         { status: "failed" }
       );
@@ -422,7 +455,7 @@ export const checkStatus = async (req, res) => {
 
     // Try to update all tickets status to failed if they exist
     try {
-      await Ticket.updateMany(
+      await PendingTicket.updateMany(
         { orderId: transactionId },
         { status: "failed" }
       );
