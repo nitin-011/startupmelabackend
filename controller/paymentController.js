@@ -229,11 +229,15 @@ export const createOrder = async (req, res) => {
       if (itemType === 'stall') {
         ticketData.stallType = stallType;
         ticketData.stallId = stallId;
-        ticketData.baseAmount = baseAmount;
-        ticketData.gstAmount = gstAmount;
       } else {
         ticketData.passType = passType;
         ticketData.passId = passId;
+      }
+
+      // Save base amount and GST if provided (for both stalls and passes now)
+      if (baseAmount && gstAmount) {
+        ticketData.baseAmount = baseAmount;
+        ticketData.gstAmount = gstAmount;
       }
 
       // Save to PendingTicket instead of Ticket
