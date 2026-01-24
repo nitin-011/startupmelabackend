@@ -6,6 +6,29 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// Discount Configuration (must match frontend)
+const DISCOUNT_CONFIG = {
+  active: true,
+  percentage: 50, // 50% off
+  expiryDate: new Date('2026-01-25T23:59:59+05:30'), // January 25, 2026, 11:59:59 PM IST
+};
+
+// Helper function to check if discount is active
+const isDiscountActive = () => {
+  if (!DISCOUNT_CONFIG.active) return false;
+  const now = new Date();
+  return now < DISCOUNT_CONFIG.expiryDate;
+};
+
+// Pass pricing with discount (must match frontend passes.js)
+const PASS_PRICING = {
+  1: { originalBase: 50, discountedBase: 25 },
+  2: { originalBase: 0, discountedBase: 0 },
+  3: { originalBase: 2100, discountedBase: 1050 },
+  4: { originalBase: 3500, discountedBase: 1750 },
+  5: { originalBase: 9999, discountedBase: 4999.5 },
+};
+
 // Environment Configuration
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const IS_PRODUCTION = NODE_ENV === 'production';
@@ -175,6 +198,52 @@ export const createOrder = async (req, res) => {
         success: false,
         message: 'Invalid amount'
       });
+    }
+
+    // Validate discount for pass bookings
+    if (itemType === 'pass' && passId) {
+      const passPricing = PASS_PRICING[passId];
+
+      if (!passPricing) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid pass ID'
+        });
+      }
+
+      // Determine expected base price based on discount status
+      const expectedBasePrice = isDiscountActive()
+        ? passPricing.discountedBase
+        : passPricing.originalBase;
+
+      const expectedGST = expectedBasePrice * 0.18;
+      const expectedTotal = expectedBasePrice + expectedGST;
+      const expectedTotalForQuantity = expectedTotal * quantity;
+
+      // Allow small rounding differences (within 1 rupee)
+      const tolerance = 1;
+
+      if (Math.abs(amount - expectedTotalForQuantity) > tolerance) {
+        console.log('⚠️ Price mismatch detected:');
+        console.log('   Expected:', expectedTotalForQuantity);
+        console.log('   Received:', amount);
+        console.log('   Discount Active:', isDiscountActive());
+
+        return res.status(400).json({
+          success: false,
+          message: isDiscountActive()
+            ? 'Invalid amount. Please refresh the page to get the latest pricing.'
+            : 'Discount has expired. Please refresh the page to see current pricing.'
+        });
+      }
+
+      // Log successful discount application
+      if (isDiscountActive()) {
+        console.log('✅ Discount validated and applied:');
+        console.log(`   Pass ID: ${passId}`);
+        console.log(`   Original: ₹${passPricing.originalBase} → Discounted: ₹${passPricing.discountedBase}`);
+        console.log(`   Savings: ₹${(passPricing.originalBase - passPricing.discountedBase) * quantity} (${DISCOUNT_CONFIG.percentage}% off)`);
+      }
     }
 
     // Check for environment variables
