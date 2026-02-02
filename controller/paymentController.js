@@ -85,7 +85,7 @@ export const createOrder = async (req, res) => {
   console.log('⏰ Timestamp:', new Date().toISOString());
 
   try {
-    const { attendees, amount, quantity, itemType, passType, passId, stallType, stallId, baseAmount, gstAmount } = req.body;
+    const { attendees, amount, quantity, itemType, passType, passId, stallType, stallId, baseAmount, gstAmount, studentDocuments } = req.body;
 
     // Validate attendees array
     if (!attendees || !Array.isArray(attendees) || attendees.length === 0) {
@@ -200,6 +200,43 @@ export const createOrder = async (req, res) => {
       });
     }
 
+    // Validate Student Special Stall documents (stallId === 1)
+    if (itemType === 'stall' && stallId === 1) {
+      if (!studentDocuments) {
+        return res.status(400).json({
+          success: false,
+          message: 'Student documents are required for Student Special Stall'
+        });
+      }
+
+      const { studentIdUrl, founderProofUrl, linkedinProfile, hasCoFounder, coFounderStudentIdUrl, termsAccepted } = studentDocuments;
+
+      if (!studentIdUrl || !founderProofUrl || !linkedinProfile || !termsAccepted) {
+        return res.status(400).json({
+          success: false,
+          message: 'All student verification documents are required'
+        });
+      }
+
+      if (hasCoFounder && !coFounderStudentIdUrl) {
+        return res.status(400).json({
+          success: false,
+          message: 'Co-founder student ID is required when co-founder is specified'
+        });
+      }
+
+      // Validate LinkedIn URL format
+      const linkedinRegex = /^(https?:\/\/)?(www\.)?linkedin\.com\/(company|in)\/.+$/i;
+      if (!linkedinRegex.test(linkedinProfile)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid LinkedIn profile URL'
+        });
+      }
+
+      console.log('✅ Student stall documents validated');
+    }
+
     // Validate discount for pass bookings
     if (itemType === 'pass' && passId) {
       const passPricing = PASS_PRICING[passId];
@@ -307,6 +344,18 @@ export const createOrder = async (req, res) => {
       if (baseAmount && gstAmount) {
         ticketData.baseAmount = baseAmount;
         ticketData.gstAmount = gstAmount;
+      }
+
+      // Add student documents if this is a Student Special Stall
+      if (itemType === 'stall' && stallId === 1 && studentDocuments) {
+        ticketData.studentIdUrl = studentDocuments.studentIdUrl;
+        ticketData.founderProofUrl = studentDocuments.founderProofUrl;
+        ticketData.linkedinProfile = studentDocuments.linkedinProfile;
+        ticketData.hasCoFounder = studentDocuments.hasCoFounder;
+        ticketData.coFounderStudentIdUrl = studentDocuments.coFounderStudentIdUrl || null;
+        ticketData.termsAccepted = studentDocuments.termsAccepted;
+        ticketData.termsAcceptedAt = studentDocuments.termsAcceptedAt;
+        console.log(`   ✓ Added student documents for ticket ${i + 1}`);
       }
 
       // Save to PendingTicket instead of Ticket

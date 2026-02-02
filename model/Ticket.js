@@ -36,6 +36,15 @@ const ticketSchema = new mongoose.Schema({
   // Check-in tracking
   checkedIn: { type: Boolean, default: false }, // Whether ticket has been used for entry
   checkInTime: { type: Date }, // Timestamp of when ticket was checked in
+
+  // Student Special Stall specific fields
+  studentIdUrl: { type: String }, // Cloudinary URL for student ID
+  founderProofUrl: { type: String }, // Cloudinary URL for founder proof document
+  linkedinProfile: { type: String }, // Company or personal LinkedIn profile URL
+  hasCoFounder: { type: Boolean }, // Whether the student has a co-founder
+  coFounderStudentIdUrl: { type: String }, // Cloudinary URL for co-founder's student ID
+  termsAccepted: { type: Boolean }, // Whether student stall terms were accepted
+  termsAcceptedAt: { type: Date }, // Timestamp of terms acceptance
 }, { timestamps: true });
 
 const Ticket = mongoose.model('Ticket', ticketSchema);
