@@ -60,7 +60,7 @@ const phonepeClient = StandardCheckoutClient.getInstance(
   CLIENT_ID,
   CLIENT_SECRET,
   CLIENT_VERSION,
-  IS_PRODUCTION ? Env.PRODUCTION : Env.PRODUCTION // PhonePe SDK uses same env for both
+  IS_PRODUCTION ? Env.PRODUCTION : Env.SANDBOX
 );
 
 console.log('✅ PhonePe SDK initialized');
@@ -465,14 +465,34 @@ export const checkStatus = async (req, res) => {
     console.log('   Transaction ID:', transactionId);
 
     // Call PhonePe Status API using SDK
-    const response = await phonepeClient.getOrderStatus(transactionId);
+    let response;
 
-    console.log('📊 Status Response:', response);
+    // Check if this is a test transaction (ONLY IN DEVELOPMENT)
+    const isDev = process.env.NODE_ENV === 'development';
+
+    if (isDev && transactionId.startsWith('TEST')) {
+      console.log('🧪 Test Transaction detected (Dev Mode). Skipping PhonePe SDK check.');
+      response = {
+        state: "COMPLETED",
+        transactionId: transactionId,
+        merchantOrderId: transactionId,
+        responseCode: "SUCCESS",
+        message: "Test Payment Successful"
+      };
+    } else {
+      // Real PhonePe Check
+      response = await phonepeClient.getOrderStatus(transactionId);
+    }
+
+    console.log('📊 Status Response:', JSON.stringify(response, null, 2));
 
     if (response && response.state === "COMPLETED") {
+      console.log('✅ Payment State is COMPLETED. Proceeding to verify tickets...');
 
       // 1. Look for pending tickets first
       let activeTickets = await PendingTicket.find({ orderId: transactionId });
+      console.log(`🔎 Found ${activeTickets ? activeTickets.length : 0} pending tickets for OrderID: ${transactionId}`);
+
       let wasPending = true;
 
       // 2. If not found in pending, check if they are already confirmed in Ticket collection (Idempotency)
@@ -480,6 +500,7 @@ export const checkStatus = async (req, res) => {
         console.log('⚠️ Not found in PendingTicket, checking main Ticket collection (Idempotency check)...');
         activeTickets = await Ticket.find({ orderId: transactionId });
         wasPending = false;
+        console.log(`🔎 Found ${activeTickets ? activeTickets.length : 0} existing confirmed tickets`);
 
         if (!activeTickets || activeTickets.length === 0) {
           console.error(`❌ No tickets found anywhere for orderId: ${transactionId}`);
@@ -520,16 +541,24 @@ export const checkStatus = async (req, res) => {
 
       console.log(`✅ Successfully returned ${finalTickets.length} confirmed tickets`);
 
-      // Send email to each attendee in parallel to save time
-      await Promise.all(finalTickets.map(async (ticket) => {
-        try {
-          await sendInvoiceEmail(ticket);
-          console.log(`📧 Email sent to ${ticket.email}`);
-        } catch (emailError) {
-          console.error(`Email sending failed for ${ticket.email}:`, emailError.message);
-          // Don't fail the payment if email fails
-        }
-      }));
+      // Send email to each attendee in parallel (FIRE AND FORGET to speed up response)
+      if (wasPending) {
+        console.log('📧 Initiating email sending asynchronously for', finalTickets.length, 'tickets...');
+        Promise.all(finalTickets.map(async (ticket) => {
+          try {
+            console.log(`📧 Attempting to send email to: ${ticket.email}`);
+            await sendInvoiceEmail(ticket);
+            console.log(`✅ Email successfully sent to ${ticket.email}`);
+          } catch (emailError) {
+            console.error(`❌ Email sending failed for ${ticket.email}:`, emailError.message);
+            // Don't fail the payment if email fails
+          }
+        })).catch(err => console.error("Background email processing error:", err));
+      } else {
+        console.log('ℹ️ Skipping email sending (tickets already verified).');
+      }
+
+      console.log('📧 Email processing handed off to background.');
 
       // Return success response with all ticket details
       return res.json({
@@ -574,6 +603,15 @@ export const checkStatus = async (req, res) => {
 
   } catch (error) {
     console.error("Status Check Error:", error.message);
+
+    // LOGGING TO FILE FOR DEBUGGING
+    try {
+      const fs = await import('fs');
+      const logMessage = `\n[${new Date().toISOString()}] Error in checkStatus:\nMessage: ${error.message}\nStack: ${error.stack}\nTransactionID: ${transactionId}\n`;
+      fs.appendFileSync('backend_error_v2.log', logMessage);
+    } catch (logErr) {
+      console.error("Failed to write to log file:", logErr);
+    }
 
     // Try to update all tickets status to failed if they exist
     try {

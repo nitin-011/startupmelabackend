@@ -201,16 +201,16 @@ export const createTestOrder = async (req, res) => {
 
         // Send emails to all attendees
         console.log('📧 Sending confirmation emails...');
-        // Send emails to all attendees
-        console.log('📧 Sending confirmation emails...');
-        await Promise.all(createdTickets.map(async (ticket) => {
+        // Send emails to all attendees (FIRE AND FORGET)
+        console.log('📧 Sending confirmation emails asynchronously...');
+        Promise.all(createdTickets.map(async (ticket) => {
             try {
                 await sendInvoiceEmail(ticket);
                 console.log(`   ✓ Email sent to ${ticket.email}`);
             } catch (emailError) {
                 console.error(`   ✗ Email failed for ${ticket.email}:`, emailError.message);
             }
-        }));
+        })).catch(err => console.error("Background test email error:", err));
 
         // Return success with redirect URL (simulated)
         const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';

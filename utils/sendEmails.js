@@ -1,13 +1,19 @@
 import nodemailer from 'nodemailer';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'smtp.hostinger.com',
-  port: process.env.SMTP_PORT || 465,
-  secure: true, // Use SSL
+  port: 587, // Use port 587 for TLS
+  secure: false, // false for TLS - as a boolean not string - but the default is false so this is fine.
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
   },
+  tls: {
+    ciphers: 'SSLv3'
+  }
 });
 
 export const sendInvoiceEmail = async (ticket) => {

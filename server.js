@@ -3,6 +3,7 @@ import cors from "cors";
 import connectDB from "./config/db.js";
 import apiRouter from "./routes/apiRoutes.js";
 import adminRouter from "./routes/adminRoutes.js";
+import uploadRouter from "./routes/uploadRoutes.js";
 
 const app = express();
 
@@ -50,6 +51,7 @@ app.use(async (req, res, next) => {
 // -----------------------------------------
 app.use("/api", apiRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/upload", uploadRouter);
 
 app.get("/api/health", (req, res) => {
   res.json({
