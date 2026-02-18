@@ -144,7 +144,8 @@ export const createTestOrder = async (req, res) => {
         }
 
         // Validate amount
-        if (isNaN(amount) || amount <= 0) {
+        // Allow 0 for free tickets
+        if (isNaN(amount) || amount < 0) {
             return res.status(400).json({
                 success: false,
                 message: 'Invalid amount'

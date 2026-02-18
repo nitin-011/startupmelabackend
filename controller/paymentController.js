@@ -193,7 +193,7 @@ export const createOrder = async (req, res) => {
     }
 
     // Validate amount
-    if (isNaN(amount) || amount <= 0) {
+    if (isNaN(amount) || amount < 0) {
       return res.status(400).json({
         success: false,
         message: 'Invalid amount'
@@ -238,7 +238,8 @@ export const createOrder = async (req, res) => {
     }
 
     // Validate discount for pass bookings
-    if (itemType === 'pass' && passId) {
+    // Skip validation for Free Tickets (Amount = 0)
+    if (itemType === 'pass' && passId && amount > 0) {
       const passPricing = PASS_PRICING[passId];
 
       if (!passPricing) {
@@ -362,6 +363,54 @@ export const createOrder = async (req, res) => {
       const newTicket = await PendingTicket.create(ticketData);
       createdTickets.push(newTicket);
       console.log(`   ✓ Created pending ticket ${i + 1}/${attendees.length} - Code: ${verificationCode}`);
+    }
+
+
+
+    // Special handling for Free Tickets (Amount = 0)
+    if (amount === 0) {
+      console.log('🎉 Free Ticket Order! Skipping Payment Gateway...');
+
+      // Convert pending tickets to permanent "paid" tickets immediately
+      const confirmedTickets = [];
+
+      for (const pendingTicket of createdTickets) {
+        const ticketData = pendingTicket.toObject();
+        delete ticketData._id;
+        delete ticketData.__v;
+
+        ticketData.status = "paid";
+        ticketData.paymentId = "FREE_Pass_" + merchantTransactionId;
+        ticketData.signature = "FREE_" + merchantTransactionId;
+
+        const newTicket = await Ticket.create(ticketData);
+        confirmedTickets.push(newTicket);
+      }
+
+      // Delete from PendingTicket
+      await PendingTicket.deleteMany({ orderId: merchantTransactionId });
+      console.log('✅ Created confirmed tickets for free order');
+
+      // Send emails
+      console.log('📧 Sending confirmation emails for free tickets...');
+      Promise.all(confirmedTickets.map(async (ticket) => {
+        try {
+          await sendInvoiceEmail(ticket);
+        } catch (emailError) {
+          console.error(`❌ Email sending failed for ${ticket.email}:`, emailError.message);
+        }
+      })).catch(err => console.error("Background email processing error:", err));
+
+      // Construct redirect URL to success page
+      const redirectUrl = `${FRONTEND_URL}/checkout?paymentStatus=success&orderId=${merchantTransactionId}`;
+
+      return res.json({
+        success: true,
+        redirectUrl: redirectUrl,
+        orderId: merchantTransactionId,
+        ticketCount: confirmedTickets.length,
+        message: "Free ticket booked successfully"
+      });
     }
 
     console.log('💳 Creating PhonePe payment with SDK...');
