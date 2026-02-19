@@ -23,10 +23,8 @@ const isDiscountActive = () => {
 // Pass pricing with discount (must match frontend passes.js)
 const PASS_PRICING = {
   1: { originalBase: 50, discountedBase: 25 },
-  2: { originalBase: 0, discountedBase: 0 },
-  3: { originalBase: 2100, discountedBase: 1050 },
-  4: { originalBase: 3500, discountedBase: 1750 },
-  5: { originalBase: 9999, discountedBase: 4999.5 },
+  2: { originalBase: 2100, discountedBase: 1050 },
+  3: { originalBase: 3500, discountedBase: 1750 },
 };
 
 // Environment Configuration
