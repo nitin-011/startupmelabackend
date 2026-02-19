@@ -177,4 +177,5 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: err.message });
 });
 
+export default app;
 export { httpServer, app, io };
