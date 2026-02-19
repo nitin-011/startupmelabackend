@@ -401,8 +401,8 @@ export const createOrder = async (req, res) => {
         }
       })).catch(err => console.error("Background email processing error:", err));
 
-      // Construct redirect URL to success page
-      const redirectUrl = `${FRONTEND_URL}/checkout?paymentStatus=success&orderId=${merchantTransactionId}`;
+      // Construct redirect URL to success page (include passId/stallId like paid flow)
+      const redirectUrl = `${FRONTEND_URL}/checkout?paymentStatus=success&orderId=${merchantTransactionId}${passId ? `&passId=${passId}` : ''}${stallId ? `&stallId=${stallId}` : ''}`;
 
       return res.json({
         success: true,
