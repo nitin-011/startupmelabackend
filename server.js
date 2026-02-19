@@ -14,17 +14,34 @@ const httpServer = createServer(app);
 // -----------------------------------------
 // 1. CORS CONFIGURATION
 // -----------------------------------------
+const allowedOrigins = [
+  "https://startupmela.com",
+  "https://www.startupmela.com",
+  process.env.FRONTEND_URL,
+  "http://localhost:5173",
+  "http://localhost:3000",
+].filter(Boolean);
+
 const corsOptions = {
-  origin: [
-    "https://startupmela.com",
-    "https://www.startupmela.com",
-    "http://localhost:5173", // For local development
-    "http://localhost:3000"
-  ],
-  credentials: true, // Allow cookies/headers
+  origin: (origin, callback) => {
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    const isAllowedOrigin =
+      allowedOrigins.includes(origin) ||
+      /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin);
+
+    if (isAllowedOrigin) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
+  credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
-  optionsSuccessStatus: 200 // Some legacy browsers (IE11, various SmartTVs) choke on 204
+  optionsSuccessStatus: 200,
 };
 
 // Apply CORS middleware globally
@@ -38,7 +55,7 @@ app.options('*', cors(corsOptions));
 // -----------------------------------------
 const io = new SocketIOServer(httpServer, {
   cors: {
-    origin: corsOptions.origin,
+    origin: allowedOrigins,
     credentials: true,
     methods: ["GET", "POST"],
     allowedHeaders: ["Authorization"]
