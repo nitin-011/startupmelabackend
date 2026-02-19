@@ -47,6 +47,21 @@ export const submitVolunteer = async (req, res, next) => {
 
     await volunteer.save();
 
+    // Emit real-time event to all admin clients
+    if (global.adminNamespace) {
+      const volunteerData = {
+        volunteerId: volunteer._id,
+        name: volunteer.name,
+        email: volunteer.email,
+        phone: volunteer.phone,
+        collegeYear: volunteer.collegeYear,
+        role: volunteer.role,
+        createdAt: volunteer.createdAt
+      };
+      global.adminNamespace.emit('volunteer:created', volunteerData);
+      console.log(`📡 Emitted 'volunteer:created' event for volunteer ${volunteer._id} to ${global.adminNamespace.sockets.size} admin client(s)`);
+    }
+
     return res.status(201).json({
       success: true,
       message: "Application submitted successfully",

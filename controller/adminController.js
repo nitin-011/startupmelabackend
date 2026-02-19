@@ -358,6 +358,20 @@ export const verifyTicket = async (req, res) => {
         ticket.checkInTime = new Date();
         await ticket.save();
 
+        // Emit real-time event to all admin clients
+        if (global.adminNamespace) {
+            const checkInData = {
+                ticketId: ticket._id,
+                verificationCode: ticket.verificationCode,
+                name: ticket.name,
+                email: ticket.email,
+                itemType: ticket.itemType,
+                checkInTime: ticket.checkInTime
+            };
+            global.adminNamespace.emit('ticket:checked-in', checkInData);
+            console.log(`📡 Emitted 'ticket:checked-in' event for ticket ${ticket._id} to ${global.adminNamespace.sockets.size} admin client(s)`);
+        }
+
         res.json({
             success: true,
             message: 'Check-in successful',

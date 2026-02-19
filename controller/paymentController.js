@@ -600,21 +600,94 @@ export const checkStatus = async (req, res) => {
       // Send email to each attendee in parallel (FIRE AND FORGET to speed up response)
       if (wasPending) {
         console.log('📧 Initiating email sending asynchronously for', finalTickets.length, 'tickets...');
-        Promise.all(finalTickets.map(async (ticket) => {
+
+        // Send emails but don't block the response
+        finalTickets.forEach(async (ticket) => {
           try {
-            console.log(`📧 Attempting to send email to: ${ticket.email}`);
+            console.log(`📧 [${new Date().toISOString()}] Sending email to: ${ticket.email}`);
+            const startTime = Date.now();
             await sendInvoiceEmail(ticket);
-            console.log(`✅ Email successfully sent to ${ticket.email}`);
+            const duration = Date.now() - startTime;
+            console.log(`✅ [${new Date().toISOString()}] Email sent successfully to ${ticket.email} (took ${duration}ms)`);
+
+            // Emit email status to admin namespace
+            if (global.adminNamespace) {
+              global.adminNamespace.emit('email:sent', {
+                ticketId: ticket._id,
+                email: ticket.email,
+                orderId: ticket.orderId,
+                success: true,
+                timestamp: new Date().toISOString()
+              });
+            }
           } catch (emailError) {
-            console.error(`❌ Email sending failed for ${ticket.email}:`, emailError.message);
+            console.error(`❌ [${new Date().toISOString()}] Email sending failed for ${ticket.email}:`, emailError.message);
+            console.error('Full email error:', emailError);
+
+            // Emit email failure to admin namespace
+            if (global.adminNamespace) {
+              global.adminNamespace.emit('email:failed', {
+                ticketId: ticket._id,
+                email: ticket.email,
+                orderId: ticket.orderId,
+                error: emailError.message,
+                timestamp: new Date().toISOString()
+              });
+            }
             // Don't fail the payment if email fails
           }
-        })).catch(err => console.error("Background email processing error:", err));
+        });
       } else {
         console.log('ℹ️ Skipping email sending (tickets already verified).');
       }
 
       console.log('📧 Email processing handed off to background.');
+
+      // Emit real-time events for new orders
+      // Check if tickets are new (created within last 2 minutes) OR if they were pending
+      const isRecentOrder = finalTickets.some(ticket => {
+        const ticketAge = Date.now() - new Date(ticket.createdAt).getTime();
+        return ticketAge < 2 * 60 * 1000; // 2 minutes
+      });
+
+      if ((wasPending || isRecentOrder) && global.adminNamespace) {
+        // Broadcast to all admin clients about the new order(s)
+        console.log(`📡 Broadcasting ${finalTickets.length} order(s) to admin clients... (wasPending: ${wasPending}, isRecent: ${isRecentOrder})`);
+        finalTickets.forEach((ticket) => {
+          const orderData = {
+            orderId: ticket.orderId,
+            ticketId: ticket._id,
+            name: ticket.name,
+            email: ticket.email,
+            phone: ticket.phone,
+            itemType: ticket.itemType,
+            passType: ticket.passType,
+            stallType: ticket.stallType,
+            amount: ticket.amount,
+            verificationCode: ticket.verificationCode,
+            createdAt: ticket.createdAt,
+            profession: ticket.profession,
+            professionOther: ticket.professionOther,
+            startupName: ticket.startupName
+          };
+          global.adminNamespace.emit('order:created', orderData);
+          console.log(`📡 Emitted 'order:created' event for ticket ${ticket._id} to ${global.adminNamespace.sockets.size} admin client(s)`);
+        });
+
+        // Send targeted notification to customer's checkout session
+        if (global.checkoutNamespace) {
+          const checkoutData = {
+            success: true,
+            orderId: transactionId,
+            ticketsCount: finalTickets.length,
+            timestamp: new Date().toISOString()
+          };
+          global.checkoutNamespace.to(`order-${transactionId}`).emit('payment:confirmed', checkoutData);
+          console.log(`📡 Emitted 'payment:confirmed' event to room: order-${transactionId}`);
+        }
+      } else {
+        console.log(`ℹ️ Skipping event emission (not pending and not recent). Ticket age: ${Math.round((Date.now() - new Date(finalTickets[0]?.createdAt).getTime()) / 1000)}s`);
+      }
 
       // Return success response with all ticket details
       return res.json({
