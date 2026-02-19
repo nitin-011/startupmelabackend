@@ -401,15 +401,22 @@ export const createOrder = async (req, res) => {
         }
       })).catch(err => console.error("Background email processing error:", err));
 
-      // Construct redirect URL to success page (include passId/stallId like paid flow)
-      const redirectUrl = `${FRONTEND_URL}/checkout?paymentStatus=success&orderId=${merchantTransactionId}${passId ? `&passId=${passId}` : ''}${stallId ? `&stallId=${stallId}` : ''}`;
-
+      // For free tickets, return success data directly without redirect
+      // Frontend will show success modal immediately
       return res.json({
         success: true,
-        redirectUrl: redirectUrl,
         orderId: merchantTransactionId,
         ticketCount: confirmedTickets.length,
-        message: "Free ticket booked successfully"
+        tickets: confirmedTickets.map(t => ({
+          verificationCode: t.verificationCode,
+          name: t.name,
+          email: t.email,
+          itemType: t.itemType,
+          passType: t.passType,
+          stallType: t.stallType
+        })),
+        message: "Free ticket booked successfully",
+        isFreeTicket: true
       });
     }
 
