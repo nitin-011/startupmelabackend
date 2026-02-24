@@ -9,7 +9,7 @@ dotenv.config();
 // Pass pricing (must match frontend passes.js)
 const PASS_PRICING = {
   1: { basePrice: 50 },
-  2: { basePrice: 2100 },
+  2: { basePrice: 199 },
   3: { basePrice: 3500 },
 };
 
