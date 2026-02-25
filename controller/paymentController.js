@@ -73,6 +73,154 @@ const generateVerificationCode = () => {
   return code;
 };
 
+const PRIVATE_FREE_PASS = {
+  passId: 199,
+  passType: '₹199 Private Pass (Free)',
+};
+
+// Private free pass order flow (independent from regular checkout flow)
+export const createPrivateFreePassOrder = async (req, res) => {
+  try {
+    const { attendees } = req.body;
+
+    if (!attendees || !Array.isArray(attendees) || attendees.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Attendees are required'
+      });
+    }
+
+    if (attendees.length > 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'Maximum 5 attendees allowed in one private group order'
+      });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const phoneRegex = /^[6-9]\d{9}$/;
+
+    const merchantTransactionId = `PV199${Date.now()}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+    const createdTickets = [];
+    const isGroupBooking = attendees.length > 1;
+
+    for (let i = 0; i < attendees.length; i++) {
+      const attendee = attendees[i];
+
+      if (!attendee?.name || !attendee?.email || !attendee?.phone) {
+        return res.status(400).json({
+          success: false,
+          message: `Attendee ${i + 1}: Name, email, and phone are required`
+        });
+      }
+
+      if (attendee.name.trim().length < 2) {
+        return res.status(400).json({
+          success: false,
+          message: `Attendee ${i + 1}: Name must be at least 2 characters long`
+        });
+      }
+
+      if (!emailRegex.test(attendee.email.trim())) {
+        return res.status(400).json({
+          success: false,
+          message: `Attendee ${i + 1}: Invalid email address format`
+        });
+      }
+
+      const cleanPhone = attendee.phone.replace(/[\s+\-()]/g, '');
+      if (!phoneRegex.test(cleanPhone.slice(-10))) {
+        return res.status(400).json({
+          success: false,
+          message: `Attendee ${i + 1}: Invalid phone number. Must be a valid 10-digit Indian mobile number starting with 6-9`
+        });
+      }
+
+      const ticket = await Ticket.create({
+        name: attendee.name.trim(),
+        email: attendee.email.trim().toLowerCase(),
+        phone: cleanPhone.slice(-10),
+        itemType: 'pass',
+        passType: PRIVATE_FREE_PASS.passType,
+        passId: PRIVATE_FREE_PASS.passId,
+        amount: 0,
+        baseAmount: 0,
+        gstAmount: 0,
+        quantity: attendees.length,
+        orderId: merchantTransactionId,
+        paymentId: `PRIVATE_FREE_${merchantTransactionId}`,
+        signature: `PRIVATE_FREE_${merchantTransactionId}`,
+        status: 'paid',
+        verificationCode: generateVerificationCode(),
+        groupBooking: isGroupBooking,
+        primaryContact: i === 0,
+      });
+
+      createdTickets.push(ticket);
+    }
+
+    // Send emails asynchronously
+    createdTickets.forEach((ticket) => {
+      sendInvoiceEmail(ticket).catch((emailError) => {
+        console.error(`❌ Email sending failed for ${ticket.email}:`, emailError.message);
+      });
+    });
+
+    // Emit real-time event for admin panel
+    if (global.adminNamespace) {
+      createdTickets.forEach((ticket) => {
+        const orderData = {
+          orderId: ticket.orderId,
+          ticketId: ticket._id,
+          name: ticket.name,
+          email: ticket.email,
+          phone: ticket.phone,
+          itemType: ticket.itemType,
+          passType: ticket.passType,
+          stallType: ticket.stallType,
+          amount: ticket.amount,
+          verificationCode: ticket.verificationCode,
+          createdAt: ticket.createdAt,
+          profession: ticket.profession,
+          professionOther: ticket.professionOther,
+          startupName: ticket.startupName,
+        };
+
+        global.adminNamespace.emit('order:created', orderData);
+      });
+
+      console.log(`📡 Emitted 'order:created' event for ${createdTickets.length} private free pass ticket(s) to ${global.adminNamespace.sockets.size} admin client(s)`);
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'Private free pass booked successfully',
+      isFreeTicket: true,
+      orderId: merchantTransactionId,
+      ticketCount: createdTickets.length,
+      tickets: createdTickets.map((ticket) => ({
+        orderId: ticket.orderId,
+        name: ticket.name,
+        email: ticket.email,
+        phone: ticket.phone,
+        itemType: ticket.itemType,
+        passType: ticket.passType,
+        verificationCode: ticket.verificationCode,
+        amount: ticket.amount,
+        status: ticket.status,
+        createdAt: ticket.createdAt,
+      }))
+    });
+  } catch (error) {
+    console.error('Private free pass order error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create private free pass order',
+      error: error.message,
+    });
+  }
+};
+
 // 1. Create Payment Order
 export const createOrder = async (req, res) => {
   let merchantTransactionId = null;
