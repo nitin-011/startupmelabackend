@@ -183,6 +183,9 @@ export const getTickets = async (req, res) => {
             search
         } = req.query;
 
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 50;
+
         const query = {};
 
         if (status) query.status = status;
@@ -199,16 +202,16 @@ export const getTickets = async (req, res) => {
 
         const tickets = await Ticket.find(query)
             .sort({ createdAt: -1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit);
+            .limit(limitNum)
+            .skip((pageNum - 1) * limitNum);
 
         const count = await Ticket.countDocuments(query);
 
         res.json({
             success: true,
             tickets,
-            totalPages: Math.ceil(count / limit),
-            currentPage: page,
+            totalPages: Math.ceil(count / limitNum),
+            currentPage: pageNum,
             totalCount: count
         });
 
@@ -227,6 +230,9 @@ export const getVolunteers = async (req, res) => {
     try {
         const { page = 1, limit = 50, role, search } = req.query;
 
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 50;
+
         const query = {};
 
         if (role) query.role = role;
@@ -240,16 +246,16 @@ export const getVolunteers = async (req, res) => {
 
         const volunteers = await Volunteer.find(query)
             .sort({ createdAt: -1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit);
+            .limit(limitNum)
+            .skip((pageNum - 1) * limitNum);
 
         const count = await Volunteer.countDocuments(query);
 
         res.json({
             success: true,
             volunteers,
-            totalPages: Math.ceil(count / limit),
-            currentPage: page,
+            totalPages: Math.ceil(count / limitNum),
+            currentPage: pageNum,
             totalCount: count
         });
 
@@ -268,6 +274,9 @@ export const getInquiries = async (req, res) => {
     try {
         const { page = 1, limit = 50, category, search } = req.query;
 
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 50;
+
         const query = {};
 
         if (category) query.category = category;
@@ -281,16 +290,16 @@ export const getInquiries = async (req, res) => {
 
         const inquiries = await Inquiry.find(query)
             .sort({ createdAt: -1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit);
+            .limit(limitNum)
+            .skip((pageNum - 1) * limitNum);
 
         const count = await Inquiry.countDocuments(query);
 
         res.json({
             success: true,
             inquiries,
-            totalPages: Math.ceil(count / limit),
-            currentPage: page,
+            totalPages: Math.ceil(count / limitNum),
+            currentPage: pageNum,
             totalCount: count
         });
 

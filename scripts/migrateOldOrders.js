@@ -1,6 +1,6 @@
 // Migration script to verify old "created" orders and update them if paid
 // This version handles old orders without profession field
-import { StandardCheckoutClient, Env } from "pg-sdk-node";
+import { StandardCheckoutClient, Env } from "@phonepe-pg/pg-sdk-node";
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import Ticket from '../model/Ticket.js';
@@ -10,10 +10,20 @@ dotenv.config();
 
 const MONGODB_URI = process.env.MONGO_URI;
 
-// PhonePe Production Config
-const CLIENT_ID = "SU2512051700428638464582";
-const CLIENT_SECRET = "b2dc0e25-ad2d-4bd4-86a2-c6a64730ebba";
-const CLIENT_VERSION = 1;
+if (!MONGODB_URI) {
+    console.error('❌ MONGO_URI environment variable is not set.');
+    process.exit(1);
+}
+
+// PhonePe Production Config — read from env
+const CLIENT_ID = process.env.PHONEPE_PROD_MERCHANT_ID;
+const CLIENT_SECRET = process.env.PHONEPE_PROD_SALT_KEY;
+const CLIENT_VERSION = parseInt(process.env.PHONEPE_PROD_SALT_INDEX) || 1;
+
+if (!CLIENT_ID || !CLIENT_SECRET) {
+    console.error('❌ Missing PhonePe production credentials (PHONEPE_PROD_MERCHANT_ID, PHONEPE_PROD_SALT_KEY)');
+    process.exit(1);
+}
 
 // Initialize PhonePe Client
 const phonepeClient = StandardCheckoutClient.getInstance(

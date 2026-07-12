@@ -3,6 +3,7 @@ import { submitVolunteer } from "../controller/volunteerController..js";
 import { submitInquiry } from "../controller/contactController.js";
 import { createOrder, checkStatus, createPrivateFreePassOrder } from "../controller/paymentController.js";
 import { createTestOrder } from "../controller/testPaymentController.js";
+import { sendTestEmail } from "../controller/testEmailController.js";
 
 const router = express.Router();
 
@@ -21,7 +22,6 @@ router.post("/payment/private-pass/free", createPrivateFreePassOrder);
 router.post("/payment/test", createTestOrder);
 
 // DEBUG: Email Test Route
-import { sendTestEmail } from "../controller/testEmailController.js";
 router.post("/debug/email", sendTestEmail);
 
 export default router;

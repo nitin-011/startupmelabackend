@@ -1,5 +1,5 @@
 
-import { StandardCheckoutClient, Env } from "pg-sdk-node";
+import { StandardCheckoutClient, Env } from "@phonepe-pg/pg-sdk-node";
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import Ticket from '../model/Ticket.js';

@@ -12,6 +12,7 @@
     "dev": "nodemon index.js"
   },
   "dependencies": {
+    "@phonepe-pg/pg-sdk-node": "^2.0.6",
     "axios": "^1.7.2",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^1.41.3",
@@ -23,7 +24,6 @@
     "multer": "^2.0.2",
     "multer-storage-cloudinary": "^4.0.0",
     "nodemailer": "^7.0.11",
-    "pg-sdk-node": "https://phonepe.mycloudrepo.io/public/repositories/phonepe-pg-sdk-node/releases/v2/phonepe-pg-sdk-node.tgz",
     "razorpay": "^2.9.6",
     "socket.io": "^4.8.3"
   },

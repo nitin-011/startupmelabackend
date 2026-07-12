@@ -1,4 +1,4 @@
-import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from "pg-sdk-node";
+import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from "@phonepe-pg/pg-sdk-node";
 import Ticket from '../model/Ticket.js';
 import PendingTicket from '../model/PendingTicket.js';
 import { sendInvoiceEmail } from '../utils/sendEmails.js';
@@ -35,19 +35,26 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
 console.log('🔐 PhonePe Configuration:');
 console.log('   Environment:', NODE_ENV.toUpperCase());
-console.log('   Client ID:', CLIENT_ID);
+console.log('   Client ID:', CLIENT_ID ? CLIENT_ID.substring(0, 6) + '...' : 'NOT SET');
 console.log('   Client Version:', CLIENT_VERSION);
 console.log('   Mode:', IS_PRODUCTION ? 'PRODUCTION' : 'DEVELOPMENT');
 
-// Initialize PhonePe Client
-const phonepeClient = StandardCheckoutClient.getInstance(
-  CLIENT_ID,
-  CLIENT_SECRET,
-  CLIENT_VERSION,
-  IS_PRODUCTION ? Env.PRODUCTION : Env.SANDBOX
-);
-
-console.log('✅ PhonePe SDK initialized');
+// Lazy-initialize PhonePe client to avoid crashing at module load if env vars are missing
+let _phonepeClient = null;
+const getPhonepeClient = () => {
+  if (_phonepeClient) return _phonepeClient;
+  if (!CLIENT_ID || !CLIENT_SECRET || !CLIENT_VERSION) {
+    throw new Error('PhonePe credentials not configured. Check environment variables.');
+  }
+  _phonepeClient = StandardCheckoutClient.getInstance(
+    CLIENT_ID,
+    CLIENT_SECRET,
+    CLIENT_VERSION,
+    IS_PRODUCTION ? Env.PRODUCTION : Env.SANDBOX
+  );
+  console.log('✅ PhonePe SDK initialized');
+  return _phonepeClient;
+};
 
 // Helper function to generate 9-digit verification code
 const generateVerificationCode = () => {
@@ -410,6 +417,16 @@ export const createOrder = async (req, res) => {
       });
     }
 
+    // Get (or initialize) the PhonePe client
+    let phonepeClient;
+    try {
+      phonepeClient = getPhonepeClient();
+    } catch (clientErr) {
+      return res.status(500).json({
+        success: false,
+        message: clientErr.message
+      });
+    }
     // Generate unique Transaction ID with better randomness
     merchantTransactionId = `MT${Date.now()}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
@@ -654,6 +671,7 @@ export const checkStatus = async (req, res) => {
       };
     } else {
       // Real PhonePe Check
+      const phonepeClient = getPhonepeClient();
       response = await phonepeClient.getOrderStatus(transactionId);
     }
 

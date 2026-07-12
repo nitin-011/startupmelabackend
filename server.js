@@ -17,7 +17,6 @@ const httpServer = createServer(app);
 const allowedOrigins = [
   "https://startupmela.com",
   "https://www.startupmela.com",
-  process.env.FRONTEND_URL,
   "http://localhost:5173",
   "http://localhost:3000",
 ].filter(Boolean);

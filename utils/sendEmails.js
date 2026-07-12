@@ -24,7 +24,7 @@ export const sendInvoiceEmail = async (ticket) => {
     : `Ticket Confirmed: ${ticket.passType}`;
 
   const mailOptions = {
-    from: `"Startup Mela" <Contact@startupmela.com>`,
+    from: `"Startup Mela" <${process.env.SMTP_USER}>`,
     to: ticket.email,
     subject: subject,
     html: `
