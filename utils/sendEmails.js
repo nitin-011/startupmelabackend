@@ -106,7 +106,7 @@ export const sendInvoiceEmail = async (ticket) => {
           <div class="content">
             <p class="greeting">Dear <strong>${ticket.name}</strong>,</p>
             
-            <p>Thank you for confirming your presence for <strong>STARTUP MELA 2026</strong> scheduled on <strong>28th February and 1st March 2026</strong>.</p>
+            <p>Thank you for confirming your presence for <strong>STARTUP MELA 2027</strong> scheduled on <strong>27th, 28th and 29th March 2027</strong>.</p>
             
             <div class="code-box">
               <div class="code-label">Your Unique Registration Code</div>
@@ -124,11 +124,11 @@ export const sendInvoiceEmail = async (ticket) => {
             
             <p style="margin-top: 25px;">We look forward to seeing you at the event!</p>
             
-            <p style="margin-top: 30px;">Thank You,<br><strong>Startup Mela 2026</strong></p>
+            <p style="margin-top: 30px;">Thank You,<br><strong>Startup Mela 2027</strong></p>
           </div>
           <div class="footer">
             <p>Questions? Contact us at contact@startupmela.com or call 7743096565</p>
-            <p>© 2026 Startup Mela. All rights reserved.</p>
+            <p>© 2027 Startup Mela. All rights reserved.</p>
           </div>
         </div>
       </body>
