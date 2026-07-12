@@ -1,4 +1,5 @@
 import Volunteer from "../model/Volunteer.js";
+import { sendVolunteerConfirmationEmail } from "../utils/sendEmails.js";
 
 /**
  * Submit volunteer application
@@ -62,13 +63,17 @@ export const submitVolunteer = async (req, res, next) => {
       console.log(`📡 Emitted 'volunteer:created' event for volunteer ${volunteer._id} to ${global.adminNamespace.sockets.size} admin client(s)`);
     }
 
+    // Send confirmation email to the volunteer (fire-and-forget)
+    sendVolunteerConfirmationEmail(volunteer).catch((emailError) => {
+      console.error(`❌ Volunteer confirmation email failed for ${volunteer.email}:`, emailError.message);
+    });
+
     return res.status(201).json({
       success: true,
       message: "Application submitted successfully",
       volunteerId: volunteer._id,
     });
   } catch (error) {
-    // Pass error to error-handling middleware if you have one
     console.error("Volunteer submit error:", error);
     return res.status(500).json({ success: false, message: error.message });
   }

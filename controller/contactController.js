@@ -1,4 +1,5 @@
 import Inquiry from '../model/Inquiry.js';
+import { sendContactAcknowledgementEmail } from '../utils/sendEmails.js';
 
 export const submitInquiry = async (req, res) => {
   try {
@@ -41,7 +42,13 @@ export const submitInquiry = async (req, res) => {
       console.log(`📡 Emitted 'inquiry:created' event for inquiry ${inquiry._id} to ${global.adminNamespace.sockets.size} admin client(s)`);
     }
 
+    // Send acknowledgement email (fire-and-forget)
+    sendContactAcknowledgementEmail(inquiry).catch((emailError) => {
+      console.error(`❌ Contact acknowledgement email failed for ${inquiry.email}:`, emailError.message);
+    });
+
     res.status(201).json({ success: true, message: 'Inquiry received' });
+
   } catch (error) {
     console.error('Contact submit error:', error);
     res.status(400).json({ success: false, message: error.message });
