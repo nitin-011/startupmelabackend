@@ -67,7 +67,7 @@ const generateVerificationCode = () => {
 };
 
 const PRIVATE_FREE_PASS = {
-  passId: 199,
+  passId: 1,
   passType: '₹199 Private Pass (Free)',
 };
 
@@ -389,7 +389,8 @@ export const createOrder = async (req, res) => {
       }
 
       const expectedBasePrice = passPricing.basePrice;
-      const expectedGST = expectedBasePrice * 0.18;
+      // Round GST to match frontend rounding (e.g. 199 * 0.18 = 35.82 → 36)
+      const expectedGST = Math.round(expectedBasePrice * 0.18);
       const expectedTotal = expectedBasePrice + expectedGST;
       const expectedTotalForQuantity = expectedTotal * quantity;
 
@@ -407,26 +408,6 @@ export const createOrder = async (req, res) => {
         });
       }
     }
-
-    // Check for environment variables
-    if (!CLIENT_ID || !CLIENT_SECRET || !CLIENT_VERSION) {
-      console.error('PhonePe credentials not configured');
-      return res.status(500).json({
-        success: false,
-        message: 'Payment gateway not configured'
-      });
-    }
-
-    // Get (or initialize) the PhonePe client
-    let phonepeClient;
-    try {
-      phonepeClient = getPhonepeClient();
-    } catch (clientErr) {
-      return res.status(500).json({
-        success: false,
-        message: clientErr.message
-      });
-    }
     // Generate unique Transaction ID with better randomness
     merchantTransactionId = `MT${Date.now()}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
@@ -439,7 +420,7 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    console.log('💳 Creating PENDING tickets for', attendees.length, 'attendee(s)...');
+    console.log(`${amount === 0 ? '🎉' : '💳'} Creating tickets for`, attendees.length, 'attendee(s)...');
     console.log('   Order ID:', merchantTransactionId);
 
     // Create separate ticket document for each attendee
@@ -449,10 +430,12 @@ export const createOrder = async (req, res) => {
       const attendee = attendees[i];
       const verificationCode = generateVerificationCode();
 
+      const cleanPhone = attendee.phone.replace(/[\s+\-()]/g, '').slice(-10);
+
       const ticketData = {
-        name: attendee.name,
-        email: attendee.email,
-        phone: attendee.phone,
+        name: attendee.name.trim(),
+        email: attendee.email.trim().toLowerCase(),
+        phone: cleanPhone,
         profession: attendee.profession,
         professionOther: attendee.professionOther || null,
         startupName: attendee.startupName || null,
@@ -499,13 +482,11 @@ export const createOrder = async (req, res) => {
       console.log(`   ✓ Created pending ticket ${i + 1}/${attendees.length} - Code: ${verificationCode}`);
     }
 
-
-
-    // Special handling for Free Tickets (Amount = 0)
+    // ─── FREE TICKET SHORT-CIRCUIT ────────────────────────────────────────────
+    // For ₹0 passes, skip the payment gateway entirely and confirm tickets now.
     if (amount === 0) {
       console.log('🎉 Free Ticket Order! Skipping Payment Gateway...');
 
-      // Convert pending tickets to permanent "paid" tickets immediately
       const confirmedTickets = [];
 
       for (const pendingTicket of createdTickets) {
@@ -521,11 +502,11 @@ export const createOrder = async (req, res) => {
         confirmedTickets.push(newTicket);
       }
 
-      // Delete from PendingTicket
+      // Remove from pending collection
       await PendingTicket.deleteMany({ orderId: merchantTransactionId });
       console.log('✅ Created confirmed tickets for free order');
 
-      // Send emails
+      // Send confirmation emails (non-blocking)
       console.log('📧 Sending confirmation emails for free tickets...');
       Promise.all(confirmedTickets.map(async (ticket) => {
         try {
@@ -533,10 +514,26 @@ export const createOrder = async (req, res) => {
         } catch (emailError) {
           console.error(`❌ Email sending failed for ${ticket.email}:`, emailError.message);
         }
-      })).catch(err => console.error("Background email processing error:", err));
+      })).catch(err => console.error('Background email processing error:', err));
 
-      // For free tickets, return success data directly without redirect
-      // Frontend will show success modal immediately
+      // Emit real-time event for admin panel
+      if (global.adminNamespace) {
+        confirmedTickets.forEach((ticket) => {
+          global.adminNamespace.emit('order:created', {
+            orderId: ticket.orderId,
+            ticketId: ticket._id,
+            name: ticket.name,
+            email: ticket.email,
+            phone: ticket.phone,
+            itemType: ticket.itemType,
+            passType: ticket.passType,
+            amount: ticket.amount,
+            verificationCode: ticket.verificationCode,
+            createdAt: ticket.createdAt,
+          });
+        });
+      }
+
       return res.json({
         success: true,
         orderId: merchantTransactionId,
@@ -549,8 +546,30 @@ export const createOrder = async (req, res) => {
           passType: t.passType,
           stallType: t.stallType
         })),
-        message: "Free ticket booked successfully",
+        message: 'Free ticket booked successfully',
         isFreeTicket: true
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Only initialise PhonePe for actual (non-zero) payments
+    // Check for environment variables
+    if (!CLIENT_ID || !CLIENT_SECRET || !CLIENT_VERSION) {
+      console.error('PhonePe credentials not configured');
+      return res.status(500).json({
+        success: false,
+        message: 'Payment gateway not configured'
+      });
+    }
+
+    // Get (or initialize) the PhonePe client
+    let phonepeClient;
+    try {
+      phonepeClient = getPhonepeClient();
+    } catch (clientErr) {
+      return res.status(500).json({
+        success: false,
+        message: clientErr.message
       });
     }
 
@@ -594,7 +613,7 @@ export const createOrder = async (req, res) => {
 
       return res.status(400).json({
         success: false,
-        message: "Payment gateway error - no redirect URL received"
+        message: 'Payment gateway error - no redirect URL received'
       });
     }
 
