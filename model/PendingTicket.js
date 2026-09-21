@@ -47,8 +47,18 @@ const pendingTicketSchema = new mongoose.Schema({
     termsAcceptedAt: { type: Date }, // Timestamp of terms acceptance
 }, { timestamps: true });
 
-// TTL Index: Documents expire 15 minutes (900 seconds) after creation if not moved to main collection
-pendingTicketSchema.index({ createdAt: 1 }, { expireAfterSeconds: 900 });
+// TTL Index: pending orders expire 2 hours after creation if never confirmed.
+//
+// This window has to outlast the whole payment attempt, not just the happy
+// path: bank OTP pages, UPI app switches and PhonePe webhook retries can all
+// push confirmation well past the old 15-minute limit. A row that expires
+// before confirmation arrives is a customer who paid and has no ticket and no
+// recoverable record, so err long — the reconcile sweep clears failed orders
+// out well before the TTL is reached.
+//
+// NOTE: changing expireAfterSeconds does not update an index that already
+// exists in MongoDB. Run scripts/updatePendingTicketTTL.js once per environment.
+pendingTicketSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7200 });
 
 const PendingTicket = mongoose.model('PendingTicket', pendingTicketSchema);
 export default PendingTicket;

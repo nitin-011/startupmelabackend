@@ -11,5 +11,11 @@
       "source": "/(.*)",
       "destination": "/server.js"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/payment/reconcile",
+      "schedule": "*/10 * * * *"
+    }
   ]
 }

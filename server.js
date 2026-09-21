@@ -138,7 +138,19 @@ global.io = io;
 global.adminNamespace = adminNamespace;
 global.checkoutNamespace = checkoutNamespace;
 
-app.use(express.json());
+// Keep the byte-exact request body around. The PhonePe webhook signature is
+// computed over the raw payload, so re-serialising the parsed object would not
+// verify. Only retained for the webhook route to avoid holding a second copy of
+// every request body in memory.
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      if (req.originalUrl.startsWith("/api/payment/webhook")) {
+        req.rawBody = buf.toString("utf8");
+      }
+    },
+  }),
+);
 
 // -----------------------------------------
 // 2. DB CONNECTION MIDDLEWARE
