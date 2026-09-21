@@ -11,14 +11,19 @@ dotenv.config();
 // cost — the client-supplied `amount` is only ever compared against these, never
 // trusted. Keep in sync with frontend src/data/passes.js and src/data/stalls.js.
 // An id that is not listed here cannot be purchased.
+// NOTE: passes 2 and 3 are comingSoon in the frontend and carry a placeholder
+// totalPrice of 0 there. The values below are their intended base prices. When
+// either goes on sale, confirm the frontend's totalPrice equals basePrice plus
+// 18% GST — if it is sold without GST, this table must change too or every
+// purchase will be rejected as mispriced.
 const PASS_PRICING = {
-  1: { basePrice: 0 },     // Exhibition (free)
-  2: { basePrice: 199 },   // All-Access Conference Pass
-  3: { basePrice: 3500 },  // Startup Pitching Pass
+  1: { basePrice: 0 },     // Exhibition (free)         → ₹0
+  2: { basePrice: 199 },   // All-Access Conference Pass → ₹235 inc. GST
+  3: { basePrice: 3500 },  // Startup Pitching Pass      → ₹4,130 inc. GST
 };
 
 const STALL_PRICING = {
-  3: { basePrice: 25000 }, // 8 × 8 ft Premium Exhibition Stall
+  3: { basePrice: 30000 }, // 8 × 8 ft Premium Exhibition Stall → ₹35,400 inc. GST
 };
 
 // GST is 18% on the base price, rounded to the nearest rupee to match the
