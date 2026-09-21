@@ -37,6 +37,11 @@ const pendingTicketSchema = new mongoose.Schema({
     checkedIn: { type: Boolean, default: false }, // Whether ticket has been used for entry
     checkInTime: { type: Date }, // Timestamp of when ticket was checked in
 
+    // Carried through to Ticket on confirmation — see model/Ticket.js.
+    // No unique index here: pending rows are transient and the guarantee is
+    // enforced where the ticket actually becomes real.
+    freeTicketKey: { type: String },
+
     // Student Special Stall specific fields
     studentIdUrl: { type: String }, // Cloudinary URL for student ID
     founderProofUrl: { type: String }, // Cloudinary URL for founder proof document
