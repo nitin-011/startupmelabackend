@@ -2,6 +2,7 @@ import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from "@phonep
 import Ticket from '../model/Ticket.js';
 import PendingTicket from '../model/PendingTicket.js';
 import { sendInvoiceEmail } from '../utils/sendEmails.js';
+import { NODE_ENV, IS_PRODUCTION, TEST_PAYMENTS_ENABLED } from '../config/environment.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -66,9 +67,8 @@ const validateOrderPricing = ({ itemType, passId, stallId, amount, quantity }) =
   return null;
 };
 
-// Environment Configuration
-const NODE_ENV = process.env.NODE_ENV || 'development';
-const IS_PRODUCTION = NODE_ENV === 'production';
+// Environment and mode come from config/environment.js, which fails safe when
+// NODE_ENV is unset rather than defaulting to development.
 
 // PhonePe Config - Select based on environment
 const CLIENT_ID = IS_PRODUCTION
@@ -922,7 +922,7 @@ export const createOrder = async (req, res) => {
       success: false,
       message: errorMessage,
       code: error.response?.data?.code,
-      details: process.env.NODE_ENV === 'development' ? error.response?.data : undefined
+      details: IS_PRODUCTION ? undefined : error.response?.data
     });
   }
 };
@@ -938,10 +938,9 @@ export const checkStatus = async (req, res) => {
 
     let response;
 
-    // Check if this is a test transaction (ONLY IN DEVELOPMENT)
-    const isDev = process.env.NODE_ENV === 'development';
-
-    if (isDev && transactionId.startsWith('TEST')) {
+    // Accepting a TEST order as paid without asking PhonePe is only safe
+    // behind the explicit local-only opt-in, never on NODE_ENV alone.
+    if (TEST_PAYMENTS_ENABLED && transactionId.startsWith('TEST')) {
       console.log('🧪 Test Transaction detected (Dev Mode). Skipping PhonePe SDK check.');
       response = {
         state: "COMPLETED",
