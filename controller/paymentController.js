@@ -124,7 +124,7 @@ const generateVerificationCode = () => {
  *
  * Idempotent and safe under concurrency. The confirmed Ticket deliberately
  * reuses the PendingTicket's _id, so when two callers race (the checkout page
- * polls every 3s while the webhook fires, and both can arrive at once) the
+ * polls every 3s while a socket event fires, and both can arrive at once) the
  * loser hits a duplicate-key error instead of creating a second ticket. Only
  * the caller that actually inserted a row gets it back in `newlyConfirmed`,
  * so invoice emails and admin events fire exactly once per ticket.
@@ -841,9 +841,9 @@ export const checkStatus = async (req, res) => {
       });
 
       if (!tickets.length) {
-        // Paid at the gateway but we have no record of the order. This is the
-        // case the webhook and the reconcile sweep exist to prevent; if it
-        // still happens it needs a human, so make it loud rather than a bare 404.
+        // Paid at the gateway but we have no record of the order — the
+        // pending rows expired, or were never written. There is no automatic
+        // recovery path, so this needs a human. Make it loud, not a bare 404.
         console.error(`🚨 PAID ORDER WITH NO TICKETS: ${transactionId}`);
         return res.status(404).json({
           success: false,
@@ -888,8 +888,8 @@ export const checkStatus = async (req, res) => {
     console.error("Status Check Error:", error.message);
 
     // A status lookup that blew up tells us nothing about the payment, so do
-    // NOT mark anything failed here — the webhook or the reconcile sweep may
-    // still confirm it. Report non-terminal so the client keeps polling.
+    // NOT mark anything failed here — a later poll may still confirm it.
+    // Report non-terminal so the client keeps polling.
     return res.status(500).json({
       success: false,
       state: 'ERROR',
@@ -897,137 +897,5 @@ export const checkStatus = async (req, res) => {
       message: "Error verifying payment status",
       error: error.message
     });
-  }
-};
-
-// 3. PhonePe server-to-server webhook.
-//
-// This is the confirmation path that does not depend on the customer's browser
-// coming back. Configure the URL and the username/password pair in the PhonePe
-// merchant dashboard, and set PHONEPE_CALLBACK_USERNAME / PHONEPE_CALLBACK_PASSWORD.
-export const handlePhonePeWebhook = async (req, res) => {
-  const username = process.env.PHONEPE_CALLBACK_USERNAME;
-  const password = process.env.PHONEPE_CALLBACK_PASSWORD;
-
-  if (!username || !password) {
-    console.error('❌ Webhook received but PHONEPE_CALLBACK_USERNAME/PASSWORD are not configured');
-    return res.status(500).json({ success: false, message: 'Webhook not configured' });
-  }
-
-  const authorization = req.headers['authorization'];
-  if (!authorization) {
-    console.warn('⚠️ Webhook rejected: missing authorization header');
-    return res.status(401).json({ success: false, message: 'Missing authorization' });
-  }
-
-  // validateCallback needs the byte-exact body that was signed, not a
-  // re-serialised object — server.js stashes it on req.rawBody.
-  const rawBody = req.rawBody;
-  if (!rawBody) {
-    console.error('❌ Webhook received without a raw body; cannot verify signature');
-    return res.status(400).json({ success: false, message: 'Missing request body' });
-  }
-
-  let callback;
-  try {
-    callback = getPhonepeClient().validateCallback(username, password, authorization, rawBody);
-  } catch (err) {
-    console.warn('⚠️ Webhook rejected: invalid signature —', err.message);
-    return res.status(401).json({ success: false, message: 'Invalid callback signature' });
-  }
-
-  const payload = callback?.payload || {};
-  const orderId = payload.merchantOrderId || payload.orderId;
-  const state = payload.state;
-
-  console.log(`📨 PhonePe webhook: type=${callback?.type} order=${orderId} state=${state}`);
-
-  if (!orderId) {
-    // Acknowledge so PhonePe stops retrying something we can never act on.
-    console.warn('⚠️ Webhook had no merchantOrderId; acknowledging and ignoring');
-    return res.status(200).json({ success: true, message: 'Ignored: no order ID' });
-  }
-
-  try {
-    if (state === 'COMPLETED') {
-      const { tickets, newlyConfirmed } = await confirmOrder(orderId, {
-        paymentId: payload.paymentDetails?.[0]?.transactionId || orderId,
-        signature: orderId,
-      });
-
-      if (!tickets.length) {
-        console.error(`🚨 Webhook confirmed payment for ${orderId} but no tickets were found`);
-      } else {
-        console.log(`✅ Webhook confirmed ${tickets.length} ticket(s), ${newlyConfirmed.length} newly`);
-      }
-
-      dispatchConfirmation(newlyConfirmed, orderId);
-    } else {
-      console.log(`❌ Webhook reports non-completed state (${state}) for ${orderId}`);
-      await PendingTicket.updateMany({ orderId }, { status: 'failed' });
-    }
-
-    return res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('❌ Webhook processing error:', error.message);
-    // Return 500 so PhonePe retries — confirmOrder is idempotent, so a retry
-    // is always safe.
-    return res.status(500).json({ success: false, message: 'Processing failed' });
-  }
-};
-
-// 4. Reconciliation sweep — the backstop for orders where both the redirect and
-// the webhook were missed. Safe to call repeatedly; intended for a scheduled
-// job. Protected by CRON_SECRET.
-export const reconcilePendingOrders = async (req, res) => {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    return res.status(500).json({ success: false, message: 'CRON_SECRET not configured' });
-  }
-
-  const provided = req.headers['authorization']?.replace(/^Bearer\s+/i, '');
-  if (provided !== secret) {
-    return res.status(401).json({ success: false, message: 'Unauthorized' });
-  }
-
-  try {
-    // Give an order a minute to settle before chasing it.
-    const cutoff = new Date(Date.now() - 60 * 1000);
-    const stale = await PendingTicket.find({ createdAt: { $lt: cutoff } }).distinct('orderId');
-
-    console.log(`🔄 Reconciling ${stale.length} unconfirmed order(s)...`);
-
-    const phonepeClient = getPhonepeClient();
-    const summary = { checked: 0, confirmed: 0, failed: 0, errors: 0 };
-
-    for (const orderId of stale) {
-      summary.checked++;
-      try {
-        const status = await phonepeClient.getOrderStatus(orderId);
-
-        if (status?.state === 'COMPLETED') {
-          const { newlyConfirmed } = await confirmOrder(orderId, {
-            paymentId: status.transactionId || orderId,
-            signature: status.merchantOrderId || orderId,
-          });
-          dispatchConfirmation(newlyConfirmed, orderId);
-          summary.confirmed++;
-          console.log(`   ✅ Recovered ${orderId} (${newlyConfirmed.length} ticket(s))`);
-        } else if (['FAILED', 'CANCELLED', 'EXPIRED', 'DECLINED'].includes(status?.state)) {
-          await PendingTicket.deleteMany({ orderId });
-          summary.failed++;
-        }
-        // Anything still in progress is left alone for the next sweep.
-      } catch (err) {
-        summary.errors++;
-        console.error(`   ✗ ${orderId}: ${err.message}`);
-      }
-    }
-
-    console.log('🔄 Reconcile complete:', JSON.stringify(summary));
-    return res.json({ success: true, ...summary });
-  } catch (error) {
-    console.error('❌ Reconcile error:', error.message);
-    return res.status(500).json({ success: false, message: error.message });
   }
 };
