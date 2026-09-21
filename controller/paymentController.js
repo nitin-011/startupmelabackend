@@ -2,20 +2,78 @@ import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from "@phonep
 import Ticket from '../model/Ticket.js';
 import PendingTicket from '../model/PendingTicket.js';
 import { sendInvoiceEmail } from '../utils/sendEmails.js';
+import { NODE_ENV, IS_PRODUCTION, TEST_PAYMENTS_ENABLED } from '../config/environment.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Pass pricing (must match frontend passes.js)
+// Server-side price tables. These are the source of truth for what an order may
+// cost — the client-supplied `amount` is only ever compared against these, never
+// trusted. Keep in sync with frontend src/data/passes.js and src/data/stalls.js.
+// An id that is not listed here cannot be purchased.
+// NOTE: passes 2 and 3 are comingSoon in the frontend and carry a placeholder
+// totalPrice of 0 there. The values below are their intended base prices. When
+// either goes on sale, confirm the frontend's totalPrice equals basePrice plus
+// 18% GST — if it is sold without GST, this table must change too or every
+// purchase will be rejected as mispriced.
 const PASS_PRICING = {
-  1: { basePrice: 50 },
-  2: { basePrice: 199 },
-  3: { basePrice: 3500 },
+  1: { basePrice: 0 },     // Exhibition (free)         → ₹0
+  2: { basePrice: 199 },   // All-Access Conference Pass → ₹235 inc. GST
+  3: { basePrice: 3500 },  // Startup Pitching Pass      → ₹4,130 inc. GST
 };
 
-// Environment Configuration
-const NODE_ENV = process.env.NODE_ENV || 'development';
-const IS_PRODUCTION = NODE_ENV === 'production';
+const STALL_PRICING = {
+  3: { basePrice: 30000 }, // 8 × 8 ft Premium Exhibition Stall → ₹35,400 inc. GST
+};
+
+// GST is 18% on the base price, rounded to the nearest rupee to match the
+// frontend (e.g. 199 * 0.18 = 35.82 → 36).
+const GST_RATE = 0.18;
+
+const expectedTotalFor = (basePrice) =>
+  basePrice + Math.round(basePrice * GST_RATE);
+
+/**
+ * Validates a client-supplied amount against the server price table.
+ * Returns null when the order is priced correctly, or an error message.
+ *
+ * Runs for every order including ₹0 ones — a free order still has to *be* free
+ * according to the table, otherwise a client could claim a paid pass costs
+ * nothing and the free-ticket short-circuit would issue it immediately.
+ */
+const validateOrderPricing = ({ itemType, passId, stallId, amount, quantity }) => {
+  const isStall = itemType === 'stall';
+  const table = isStall ? STALL_PRICING : PASS_PRICING;
+  const id = isStall ? stallId : passId;
+  const label = isStall ? 'stall' : 'pass';
+
+  if (id === undefined || id === null) {
+    return `Missing ${label} ID`;
+  }
+
+  const pricing = table[id];
+  if (!pricing) {
+    return `Invalid ${label} ID`;
+  }
+
+  // Stalls are sold one at a time; passes may be bought in quantity.
+  const units = isStall ? 1 : quantity;
+  const expectedTotal = expectedTotalFor(pricing.basePrice) * units;
+
+  // Allow a rupee of drift for rounding differences between client and server.
+  if (Math.abs(amount - expectedTotal) > 1) {
+    console.log('⚠️ Price mismatch detected:');
+    console.log(`   ${label} ID:`, id);
+    console.log('   Expected:', expectedTotal);
+    console.log('   Received:', amount);
+    return 'Invalid amount. Please refresh the page to get the latest pricing.';
+  }
+
+  return null;
+};
+
+// Environment and mode come from config/environment.js, which fails safe when
+// NODE_ENV is unset rather than defaulting to development.
 
 // PhonePe Config - Select based on environment
 const CLIENT_ID = IS_PRODUCTION
@@ -56,6 +114,13 @@ const getPhonepeClient = () => {
   return _phonepeClient;
 };
 
+/**
+ * Builds the uniqueness key that caps free tickets per email.
+ * See the freeTicketKey field in model/Ticket.js for the reasoning.
+ */
+const buildFreeTicketKey = (email, itemLabel, indexInOrder) =>
+  `${String(email).trim().toLowerCase()}::${itemLabel}::${indexInOrder}`;
+
 // Helper function to generate 9-digit verification code
 const generateVerificationCode = () => {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -65,6 +130,234 @@ const generateVerificationCode = () => {
   }
   return code;
 };
+
+/**
+ * Moves an order's PendingTickets into the confirmed Ticket collection.
+ *
+ * Idempotent and safe under concurrency. The confirmed Ticket deliberately
+ * reuses the PendingTicket's _id, so when two callers race (the checkout page
+ * polls every 3s while a socket event fires, and both can arrive at once) the
+ * loser hits a duplicate-key error instead of creating a second ticket. Only
+ * the caller that actually inserted a row gets it back in `newlyConfirmed`,
+ * so invoice emails and admin events fire exactly once per ticket.
+ *
+ * Tickets are created before the pending rows are deleted — if the process
+ * dies in between, the pending rows survive and a later retry converges on the
+ * same result rather than losing a paid order.
+ */
+const confirmOrder = async (orderId, { paymentId, signature } = {}) => {
+  const pendingTickets = await PendingTicket.find({ orderId });
+
+  const newlyConfirmed = [];
+  const alreadyConfirmed = [];
+
+  for (const pending of pendingTickets) {
+    const ticketData = pending.toObject();
+    delete ticketData.__v;
+
+    ticketData.status = 'paid';
+    ticketData.paymentId = paymentId || orderId;
+    ticketData.signature = signature || orderId;
+
+    try {
+      // _id is intentionally NOT stripped — it is what makes this idempotent.
+      const ticket = await Ticket.create(ticketData);
+      newlyConfirmed.push(ticket);
+    } catch (err) {
+      // Two different duplicate-key errors are possible here and they mean
+      // opposite things, so check which index actually collided.
+      const collidedOn = Object.keys(err.keyPattern || {});
+
+      if (err.code === 11000 && collidedOn.includes('freeTicketKey')) {
+        // This email has already claimed its allowance of this free pass.
+        // Not a replay — a genuine duplicate claim that must be refused.
+        const duplicate = new Error('FREE_TICKET_LIMIT_REACHED');
+        duplicate.code = 'FREE_TICKET_LIMIT_REACHED';
+        duplicate.email = ticketData.email;
+        throw duplicate;
+      }
+
+      if (err.code === 11000) {
+        // Collided on _id: a concurrent caller already confirmed this exact
+        // ticket. This is the idempotency path.
+        console.log(`   ↺ Ticket ${ticketData._id} already confirmed by a concurrent request`);
+        const existing = await Ticket.findById(ticketData._id);
+        if (existing) alreadyConfirmed.push(existing);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  if (pendingTickets.length > 0) {
+    await PendingTicket.deleteMany({ orderId });
+  }
+
+  // If there was nothing pending, the order was either confirmed on an earlier
+  // call or never existed — fall back to reading the confirmed collection.
+  const tickets =
+    newlyConfirmed.length || alreadyConfirmed.length
+      ? [...newlyConfirmed, ...alreadyConfirmed]
+      : await Ticket.find({ orderId });
+
+  return { tickets, newlyConfirmed };
+};
+
+// How long the whole invoice-sending step may take before we give up and let
+// the response go. Anything unsent is left as 'failed' for the resend script.
+const EMAIL_BUDGET_MS = 12000;
+const EMAIL_ATTEMPTS = 2;
+
+/**
+ * Sends one invoice and records the outcome on the ticket.
+ *
+ * Delivery state is persisted rather than only logged: the verification code
+ * reaches the attendee by email and nowhere else, so a silent failure means a
+ * paid customer turns up without a ticket and nobody finds out. Admin socket
+ * events cannot fill this role because Vercel serverless holds no persistent
+ * connections — the previous 'email:failed' event was emitted into nothing.
+ *
+ * Never throws.
+ */
+const sendInvoiceAndRecord = async (ticket) => {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= EMAIL_ATTEMPTS; attempt++) {
+    try {
+      await sendInvoiceEmail(ticket);
+      await Ticket.updateOne(
+        { _id: ticket._id },
+        {
+          invoiceEmailStatus: 'sent',
+          invoiceEmailAttempts: attempt,
+          invoiceEmailSentAt: new Date(),
+          invoiceEmailError: null,
+        },
+      );
+      console.log(`✅ Email sent to ${ticket.email} (attempt ${attempt})`);
+      global.adminNamespace?.emit('email:sent', {
+        ticketId: ticket._id,
+        email: ticket.email,
+        orderId: ticket.orderId,
+        success: true,
+        timestamp: new Date().toISOString(),
+      });
+      return true;
+    } catch (err) {
+      lastError = err;
+      console.error(`❌ Email attempt ${attempt} failed for ${ticket.email}: ${err.message}`);
+    }
+  }
+
+  // Record the failure so it is findable later. Best-effort: if even this
+  // write fails there is nothing further we can safely do inline.
+  try {
+    await Ticket.updateOne(
+      { _id: ticket._id },
+      {
+        invoiceEmailStatus: 'failed',
+        invoiceEmailAttempts: EMAIL_ATTEMPTS,
+        invoiceEmailError: lastError?.message?.slice(0, 500),
+      },
+    );
+  } catch (writeErr) {
+    console.error(`❌ Could not record email failure for ${ticket._id}: ${writeErr.message}`);
+  }
+
+  console.error(`🚨 INVOICE UNDELIVERED — ticket ${ticket._id} (${ticket.email}), order ${ticket.orderId}`);
+  global.adminNamespace?.emit('email:failed', {
+    ticketId: ticket._id,
+    email: ticket.email,
+    orderId: ticket.orderId,
+    error: lastError?.message,
+    timestamp: new Date().toISOString(),
+  });
+  return false;
+};
+
+/**
+ * Sends invoices and broadcasts admin/checkout events for freshly confirmed
+ * tickets. Takes only the tickets this caller actually created, so replays and
+ * concurrent callers never double-send. Never throws — a failed email must not
+ * fail a payment.
+ *
+ * Awaited by callers rather than fired and forgotten: on serverless the
+ * function can be frozen the moment the response is flushed, which would kill
+ * an in-flight send and leave no record it was ever attempted. Bounded by
+ * EMAIL_BUDGET_MS so a slow SMTP server cannot hold up the response.
+ */
+const dispatchConfirmation = async (newlyConfirmed, orderId) => {
+  if (!newlyConfirmed.length) {
+    console.log('ℹ️ No newly confirmed tickets — skipping emails and events.');
+    return;
+  }
+
+  console.log(`📧 Sending invoices for ${newlyConfirmed.length} newly confirmed ticket(s)...`);
+
+  const sending = Promise.allSettled(newlyConfirmed.map(sendInvoiceAndRecord));
+  const budget = new Promise((resolve) => setTimeout(() => resolve('TIMEOUT'), EMAIL_BUDGET_MS));
+
+  if ((await Promise.race([sending, budget])) === 'TIMEOUT') {
+    // Leave the sends running; they may still complete and record themselves.
+    // Anything that does not stays 'pending' and the resend script picks it up.
+    console.warn(`⏱️ Invoice sending exceeded ${EMAIL_BUDGET_MS}ms for order ${orderId} — responding anyway`);
+  }
+
+  if (global.adminNamespace) {
+    newlyConfirmed.forEach((ticket) => {
+      global.adminNamespace.emit('order:created', {
+        orderId: ticket.orderId,
+        ticketId: ticket._id,
+        name: ticket.name,
+        email: ticket.email,
+        phone: ticket.phone,
+        itemType: ticket.itemType,
+        passType: ticket.passType,
+        stallType: ticket.stallType,
+        amount: ticket.amount,
+        verificationCode: ticket.verificationCode,
+        createdAt: ticket.createdAt,
+        profession: ticket.profession,
+        professionOther: ticket.professionOther,
+        startupName: ticket.startupName,
+      });
+    });
+    console.log(`📡 Emitted 'order:created' for ${newlyConfirmed.length} ticket(s)`);
+  }
+
+  if (global.checkoutNamespace && orderId) {
+    global.checkoutNamespace.to(`order-${orderId}`).emit('payment:confirmed', {
+      success: true,
+      orderId,
+      ticketsCount: newlyConfirmed.length,
+      timestamp: new Date().toISOString(),
+    });
+    console.log(`📡 Emitted 'payment:confirmed' to room: order-${orderId}`);
+  }
+};
+
+/**
+ * Shape a ticket for the checkout confirmation response.
+ *
+ * Deliberately contains NO personal data and NO verification code. The status
+ * endpoint that returns this is unauthenticated and order IDs are guessable
+ * (timestamp + 4 digits), so anything included here is effectively public.
+ * Attendee names, emails, phone numbers and professions were previously
+ * exposed this way, as were the verification codes used for entry at the door.
+ *
+ * Verification codes are delivered by email only — the checkout UI states this
+ * and never displays them. Do not add them back here.
+ */
+const toConfirmationSummary = (ticket) => ({
+  orderId: ticket.orderId,
+  itemType: ticket.itemType,
+  passType: ticket.passType,
+  stallType: ticket.stallType,
+  amount: ticket.amount,
+  quantity: ticket.quantity,
+  status: ticket.status,
+  createdAt: ticket.createdAt,
+});
 
 const PRIVATE_FREE_PASS = {
   passId: 1,
@@ -129,35 +422,54 @@ export const createPrivateFreePassOrder = async (req, res) => {
         });
       }
 
-      const ticket = await Ticket.create({
-        name: attendee.name.trim(),
-        email: attendee.email.trim().toLowerCase(),
-        phone: cleanPhone.slice(-10),
-        itemType: 'pass',
-        passType: PRIVATE_FREE_PASS.passType,
-        passId: PRIVATE_FREE_PASS.passId,
-        amount: 0,
-        baseAmount: 0,
-        gstAmount: 0,
-        quantity: attendees.length,
-        orderId: merchantTransactionId,
-        paymentId: `PRIVATE_FREE_${merchantTransactionId}`,
-        signature: `PRIVATE_FREE_${merchantTransactionId}`,
-        status: 'paid',
-        verificationCode: generateVerificationCode(),
-        groupBooking: isGroupBooking,
-        primaryContact: i === 0,
-      });
+      const normalizedEmail = attendee.email.trim().toLowerCase();
+
+      let ticket;
+      try {
+        ticket = await Ticket.create({
+          name: attendee.name.trim(),
+          email: normalizedEmail,
+          phone: cleanPhone.slice(-10),
+          itemType: 'pass',
+          passType: PRIVATE_FREE_PASS.passType,
+          passId: PRIVATE_FREE_PASS.passId,
+          amount: 0,
+          baseAmount: 0,
+          gstAmount: 0,
+          quantity: attendees.length,
+          orderId: merchantTransactionId,
+          paymentId: `PRIVATE_FREE_${merchantTransactionId}`,
+          signature: `PRIVATE_FREE_${merchantTransactionId}`,
+          status: 'paid',
+          verificationCode: generateVerificationCode(),
+          groupBooking: isGroupBooking,
+          primaryContact: i === 0,
+          // This endpoint writes straight to Ticket with status 'paid' and no
+          // payment step, so it needs the same per-email cap as the other free
+          // pass. Keyed on its own passType, so claiming this pass does not
+          // consume an attendee's Exhibition pass allowance or vice versa.
+          freeTicketKey: buildFreeTicketKey(normalizedEmail, PRIVATE_FREE_PASS.passType, i),
+        });
+      } catch (err) {
+        if (err.code === 11000 && Object.keys(err.keyPattern || {}).includes('freeTicketKey')) {
+          // Remove the tickets already issued in this request so a refused
+          // group booking does not leave half of it standing.
+          await Ticket.deleteMany({ orderId: merchantTransactionId });
+          console.log(`🚫 Private free pass limit reached for ${normalizedEmail}`);
+          return res.status(409).json({
+            success: false,
+            code: 'FREE_TICKET_LIMIT_REACHED',
+            message: `${normalizedEmail} has already claimed this free pass. Please check that inbox — including spam — for the verification code.`,
+          });
+        }
+        throw err;
+      }
 
       createdTickets.push(ticket);
     }
 
-    // Send emails asynchronously
-    createdTickets.forEach((ticket) => {
-      sendInvoiceEmail(ticket).catch((emailError) => {
-        console.error(`❌ Email sending failed for ${ticket.email}:`, emailError.message);
-      });
-    });
+    // Send invoices and record delivery state (see sendInvoiceAndRecord).
+    await Promise.allSettled(createdTickets.map(sendInvoiceAndRecord));
 
     // Emit real-time event for admin panel
     if (global.adminNamespace) {
@@ -376,49 +688,19 @@ export const createOrder = async (req, res) => {
       console.log('✅ Student stall documents validated');
     }
 
-    // Validate pricing for pass bookings
-    // Skip validation for Free Tickets (Amount = 0)
-    if (itemType === 'pass' && passId && amount > 0) {
-      const passPricing = PASS_PRICING[passId];
-
-      if (!passPricing) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid pass ID'
-        });
-      }
-
-      const expectedBasePrice = passPricing.basePrice;
-      // Round GST to match frontend rounding (e.g. 199 * 0.18 = 35.82 → 36)
-      const expectedGST = Math.round(expectedBasePrice * 0.18);
-      const expectedTotal = expectedBasePrice + expectedGST;
-      const expectedTotalForQuantity = expectedTotal * quantity;
-
-      // Allow small rounding differences (within 1 rupee)
-      const tolerance = 1;
-
-      if (Math.abs(amount - expectedTotalForQuantity) > tolerance) {
-        console.log('⚠️ Price mismatch detected:');
-        console.log('   Expected:', expectedTotalForQuantity);
-        console.log('   Received:', amount);
-
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid amount. Please refresh the page to get the latest pricing.'
-        });
-      }
+    // Validate pricing against the server price table (passes AND stalls, and
+    // free orders too — see validateOrderPricing).
+    const pricingError = validateOrderPricing({ itemType, passId, stallId, amount, quantity });
+    if (pricingError) {
+      return res.status(400).json({
+        success: false,
+        message: pricingError
+      });
     }
+
     // Generate unique Transaction ID with better randomness
     merchantTransactionId = `MT${Date.now()}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
-    // Check if order already exists in PendingTicket
-    const existingOrder = await PendingTicket.findOne({ orderId: merchantTransactionId });
-    if (existingOrder) {
-      return res.status(409).json({
-        success: false,
-        message: 'Order ID conflict, please try again'
-      });
-    }
 
     console.log(`${amount === 0 ? '🎉' : '💳'} Creating tickets for`, attendees.length, 'attendee(s)...');
     console.log('   Order ID:', merchantTransactionId);
@@ -449,6 +731,16 @@ export const createOrder = async (req, res) => {
         primaryContact: i === 0 // First attendee is the primary contact
       };
 
+      // Free tickets are issued immediately with no payment step, so cap how
+      // many one email can claim. See model/Ticket.js for the key format.
+      if (amount === 0) {
+        ticketData.freeTicketKey = buildFreeTicketKey(
+          ticketData.email,
+          itemType === 'stall' ? stallType : passType,
+          i,
+        );
+      }
+
       // Add type-specific fields
       if (itemType === 'stall') {
         ticketData.stallType = stallType;
@@ -458,8 +750,10 @@ export const createOrder = async (req, res) => {
         ticketData.passId = passId;
       }
 
-      // Save base amount and GST if provided (for both stalls and passes now)
-      if (baseAmount && gstAmount) {
+      // Save base amount and GST if provided (for both stalls and passes now).
+      // Checked against undefined rather than truthiness so a ₹0 / zero-GST
+      // order still records its breakdown.
+      if (baseAmount !== undefined && gstAmount !== undefined) {
         ticketData.baseAmount = baseAmount;
         ticketData.gstAmount = gstAmount;
       }
@@ -487,65 +781,34 @@ export const createOrder = async (req, res) => {
     if (amount === 0) {
       console.log('🎉 Free Ticket Order! Skipping Payment Gateway...');
 
-      const confirmedTickets = [];
-
-      for (const pendingTicket of createdTickets) {
-        const ticketData = pendingTicket.toObject();
-        delete ticketData._id;
-        delete ticketData.__v;
-
-        ticketData.status = "paid";
-        ticketData.paymentId = "FREE_Pass_" + merchantTransactionId;
-        ticketData.signature = "FREE_" + merchantTransactionId;
-
-        const newTicket = await Ticket.create(ticketData);
-        confirmedTickets.push(newTicket);
-      }
-
-      // Remove from pending collection
-      await PendingTicket.deleteMany({ orderId: merchantTransactionId });
-      console.log('✅ Created confirmed tickets for free order');
-
-      // Send confirmation emails (non-blocking)
-      console.log('📧 Sending confirmation emails for free tickets...');
-      Promise.all(confirmedTickets.map(async (ticket) => {
-        try {
-          await sendInvoiceEmail(ticket);
-        } catch (emailError) {
-          console.error(`❌ Email sending failed for ${ticket.email}:`, emailError.message);
-        }
-      })).catch(err => console.error('Background email processing error:', err));
-
-      // Emit real-time event for admin panel
-      if (global.adminNamespace) {
-        confirmedTickets.forEach((ticket) => {
-          global.adminNamespace.emit('order:created', {
-            orderId: ticket.orderId,
-            ticketId: ticket._id,
-            name: ticket.name,
-            email: ticket.email,
-            phone: ticket.phone,
-            itemType: ticket.itemType,
-            passType: ticket.passType,
-            amount: ticket.amount,
-            verificationCode: ticket.verificationCode,
-            createdAt: ticket.createdAt,
+      let tickets, newlyConfirmed;
+      try {
+        ({ tickets, newlyConfirmed } = await confirmOrder(merchantTransactionId, {
+          paymentId: `FREE_Pass_${merchantTransactionId}`,
+          signature: `FREE_${merchantTransactionId}`,
+        }));
+      } catch (err) {
+        if (err.code === 'FREE_TICKET_LIMIT_REACHED') {
+          // Roll back the pending rows so a refused attempt leaves nothing.
+          await PendingTicket.deleteMany({ orderId: merchantTransactionId });
+          console.log(`🚫 Free ticket limit reached for ${err.email}`);
+          return res.status(409).json({
+            success: false,
+            code: 'FREE_TICKET_LIMIT_REACHED',
+            message: `${err.email} has already claimed this free pass. Please check that inbox — including spam — for the verification code.`,
           });
-        });
+        }
+        throw err;
       }
+
+      console.log('✅ Created confirmed tickets for free order');
+      await dispatchConfirmation(newlyConfirmed, merchantTransactionId);
 
       return res.json({
         success: true,
         orderId: merchantTransactionId,
-        ticketCount: confirmedTickets.length,
-        tickets: confirmedTickets.map(t => ({
-          verificationCode: t.verificationCode,
-          name: t.name,
-          email: t.email,
-          itemType: t.itemType,
-          passType: t.passType,
-          stallType: t.stallType
-        })),
+        ticketCount: tickets.length,
+        tickets: tickets.map(toConfirmationSummary),
         message: 'Free ticket booked successfully',
         isFreeTicket: true
       });
@@ -577,7 +840,11 @@ export const createOrder = async (req, res) => {
     console.log('   Total Amount:', amount);
 
     // Create payment request using PhonePe SDK
-    const redirectUrl = `${FRONTEND_URL}/checkout?paymentStatus=success&orderId=${merchantTransactionId}${passId ? `&passId=${passId}` : ''}${stallId ? `&stallId=${stallId}` : ''}`;
+    // PhonePe sends the user here whatever the outcome — success, failure or
+    // cancellation — so the param says "returned", not "succeeded". The real
+    // outcome comes from the status endpoint. (The frontend still accepts the
+    // old `success` value so payments in flight across a deploy keep working.)
+    const redirectUrl = `${FRONTEND_URL}/checkout?paymentStatus=return&orderId=${merchantTransactionId}${passId ? `&passId=${passId}` : ''}${stallId ? `&stallId=${stallId}` : ''}`;
 
     const paymentRequest = StandardCheckoutPayRequest.builder()
       .merchantOrderId(merchantTransactionId)
@@ -660,12 +927,13 @@ export const createOrder = async (req, res) => {
       success: false,
       message: errorMessage,
       code: error.response?.data?.code,
-      details: process.env.NODE_ENV === 'development' ? error.response?.data : undefined
+      details: IS_PRODUCTION ? undefined : error.response?.data
     });
   }
 };
 
 // 2. Check Status (AJAX endpoint for frontend verification)
+// 2. Check Status (AJAX endpoint the checkout page polls after the gateway redirect)
 export const checkStatus = async (req, res) => {
   const { transactionId } = req.params;
 
@@ -673,13 +941,11 @@ export const checkStatus = async (req, res) => {
     console.log('🔍 Checking payment status using SDK...');
     console.log('   Transaction ID:', transactionId);
 
-    // Call PhonePe Status API using SDK
     let response;
 
-    // Check if this is a test transaction (ONLY IN DEVELOPMENT)
-    const isDev = process.env.NODE_ENV === 'development';
-
-    if (isDev && transactionId.startsWith('TEST')) {
+    // Accepting a TEST order as paid without asking PhonePe is only safe
+    // behind the explicit local-only opt-in, never on NODE_ENV alone.
+    if (TEST_PAYMENTS_ENABLED && transactionId.startsWith('TEST')) {
       console.log('🧪 Test Transaction detected (Dev Mode). Skipping PhonePe SDK check.');
       response = {
         state: "COMPLETED",
@@ -689,225 +955,76 @@ export const checkStatus = async (req, res) => {
         message: "Test Payment Successful"
       };
     } else {
-      // Real PhonePe Check
       const phonepeClient = getPhonepeClient();
       response = await phonepeClient.getOrderStatus(transactionId);
     }
 
     console.log('📊 Status Response:', JSON.stringify(response, null, 2));
 
-    if (response && response.state === "COMPLETED") {
-      console.log('✅ Payment State is COMPLETED. Proceeding to verify tickets...');
+    const state = response?.state || 'UNKNOWN';
 
-      // 1. Look for pending tickets first
-      let activeTickets = await PendingTicket.find({ orderId: transactionId });
-      console.log(`🔎 Found ${activeTickets ? activeTickets.length : 0} pending tickets for OrderID: ${transactionId}`);
+    if (state === "COMPLETED") {
+      console.log('✅ Payment COMPLETED. Confirming tickets...');
 
-      let wasPending = true;
-
-      // 2. If not found in pending, check if they are already confirmed in Ticket collection (Idempotency)
-      if (!activeTickets || activeTickets.length === 0) {
-        console.log('⚠️ Not found in PendingTicket, checking main Ticket collection (Idempotency check)...');
-        activeTickets = await Ticket.find({ orderId: transactionId });
-        wasPending = false;
-        console.log(`🔎 Found ${activeTickets ? activeTickets.length : 0} existing confirmed tickets`);
-
-        if (!activeTickets || activeTickets.length === 0) {
-          console.error(`❌ No tickets found anywhere for orderId: ${transactionId}`);
-          return res.status(404).json({
-            success: false,
-            message: "Tickets not found"
-          });
-        }
-      }
-
-      // 3. Convert pending tickets to permanent tickets
-      let finalTickets = [];
-
-      if (wasPending) {
-        console.log(`✅ Converting ${activeTickets.length} pending tickets to permanent...`);
-
-        for (const pendingTicket of activeTickets) {
-          const ticketData = pendingTicket.toObject();
-          delete ticketData._id; // Remove _id to create new one (or keep it, but safer to let Mongo generate)
-          delete ticketData.__v;
-
-          ticketData.status = "paid";
-          ticketData.paymentId = response.transactionId || transactionId;
-          ticketData.signature = response.merchantOrderId || transactionId;
-
-          const newTicket = await Ticket.create(ticketData);
-          finalTickets.push(newTicket);
-        }
-
-        // Delete from PendingTicket
-        await PendingTicket.deleteMany({ orderId: transactionId });
-        console.log('🗑️ Removed processed tickets from PendingTicket collection');
-      } else {
-        // Already verified tickets
-        finalTickets = activeTickets;
-        console.log('✅ Tickets were already verified previously.');
-      }
-
-      console.log(`✅ Successfully returned ${finalTickets.length} confirmed tickets`);
-
-      // Send email to each attendee in parallel (FIRE AND FORGET to speed up response)
-      if (wasPending) {
-        console.log('📧 Initiating email sending asynchronously for', finalTickets.length, 'tickets...');
-
-        // Send emails but don't block the response
-        finalTickets.forEach(async (ticket) => {
-          try {
-            console.log(`📧 [${new Date().toISOString()}] Sending email to: ${ticket.email}`);
-            const startTime = Date.now();
-            await sendInvoiceEmail(ticket);
-            const duration = Date.now() - startTime;
-            console.log(`✅ [${new Date().toISOString()}] Email sent successfully to ${ticket.email} (took ${duration}ms)`);
-
-            // Emit email status to admin namespace
-            if (global.adminNamespace) {
-              global.adminNamespace.emit('email:sent', {
-                ticketId: ticket._id,
-                email: ticket.email,
-                orderId: ticket.orderId,
-                success: true,
-                timestamp: new Date().toISOString()
-              });
-            }
-          } catch (emailError) {
-            console.error(`❌ [${new Date().toISOString()}] Email sending failed for ${ticket.email}:`, emailError.message);
-            console.error('Full email error:', emailError);
-
-            // Emit email failure to admin namespace
-            if (global.adminNamespace) {
-              global.adminNamespace.emit('email:failed', {
-                ticketId: ticket._id,
-                email: ticket.email,
-                orderId: ticket.orderId,
-                error: emailError.message,
-                timestamp: new Date().toISOString()
-              });
-            }
-            // Don't fail the payment if email fails
-          }
-        });
-      } else {
-        console.log('ℹ️ Skipping email sending (tickets already verified).');
-      }
-
-      console.log('📧 Email processing handed off to background.');
-
-      // Emit real-time events for new orders
-      // Check if tickets are new (created within last 2 minutes) OR if they were pending
-      const isRecentOrder = finalTickets.some(ticket => {
-        const ticketAge = Date.now() - new Date(ticket.createdAt).getTime();
-        return ticketAge < 2 * 60 * 1000; // 2 minutes
+      const { tickets, newlyConfirmed } = await confirmOrder(transactionId, {
+        paymentId: response.transactionId || transactionId,
+        signature: response.merchantOrderId || transactionId,
       });
 
-      if ((wasPending || isRecentOrder) && global.adminNamespace) {
-        // Broadcast to all admin clients about the new order(s)
-        console.log(`📡 Broadcasting ${finalTickets.length} order(s) to admin clients... (wasPending: ${wasPending}, isRecent: ${isRecentOrder})`);
-        finalTickets.forEach((ticket) => {
-          const orderData = {
-            orderId: ticket.orderId,
-            ticketId: ticket._id,
-            name: ticket.name,
-            email: ticket.email,
-            phone: ticket.phone,
-            itemType: ticket.itemType,
-            passType: ticket.passType,
-            stallType: ticket.stallType,
-            amount: ticket.amount,
-            verificationCode: ticket.verificationCode,
-            createdAt: ticket.createdAt,
-            profession: ticket.profession,
-            professionOther: ticket.professionOther,
-            startupName: ticket.startupName
-          };
-          global.adminNamespace.emit('order:created', orderData);
-          console.log(`📡 Emitted 'order:created' event for ticket ${ticket._id} to ${global.adminNamespace.sockets.size} admin client(s)`);
+      if (!tickets.length) {
+        // Paid at the gateway but we have no record of the order — the
+        // pending rows expired, or were never written. There is no automatic
+        // recovery path, so this needs a human. Make it loud, not a bare 404.
+        console.error(`🚨 PAID ORDER WITH NO TICKETS: ${transactionId}`);
+        return res.status(404).json({
+          success: false,
+          state: 'COMPLETED',
+          terminal: true,
+          message: "Your payment went through but we could not locate your booking. Please contact support with your order ID."
         });
-
-        // Send targeted notification to customer's checkout session
-        if (global.checkoutNamespace) {
-          const checkoutData = {
-            success: true,
-            orderId: transactionId,
-            ticketsCount: finalTickets.length,
-            timestamp: new Date().toISOString()
-          };
-          global.checkoutNamespace.to(`order-${transactionId}`).emit('payment:confirmed', checkoutData);
-          console.log(`📡 Emitted 'payment:confirmed' event to room: order-${transactionId}`);
-        }
-      } else {
-        console.log(`ℹ️ Skipping event emission (not pending and not recent). Ticket age: ${Math.round((Date.now() - new Date(finalTickets[0]?.createdAt).getTime()) / 1000)}s`);
       }
 
-      // Return success response with all ticket details
+      await dispatchConfirmation(newlyConfirmed, transactionId);
+
       return res.json({
         success: true,
+        state: 'COMPLETED',
+        terminal: true,
         message: "Payment verified successfully",
-        tickets: finalTickets.map(ticket => ({
-          orderId: ticket.orderId,
-          name: ticket.name,
-          email: ticket.email,
-          phone: ticket.phone,
-          profession: ticket.profession,
-          itemType: ticket.itemType,
-          passType: ticket.passType,
-          stallType: ticket.stallType,
-          verificationCode: ticket.verificationCode,
-          amount: ticket.amount,
-          quantity: ticket.quantity,
-          status: ticket.status,
-          groupBooking: ticket.groupBooking,
-          primaryContact: ticket.primaryContact,
-          createdAt: ticket.createdAt
-        }))
-      });
-    } else {
-      // Payment Failed or Pending
-      // Update pending tickets status to failed (so they don't look like they are just waiting)
-      // They will eventually expire via TTL
-
-      console.log(`❌ Payment not completed. Status: ${response?.state}`);
-
-      await PendingTicket.updateMany(
-        { orderId: transactionId },
-        { status: "failed" }
-      );
-
-      return res.json({
-        success: false,
-        message: "Payment verification failed",
-        status: response?.state || "UNKNOWN"
+        tickets: tickets.map(toConfirmationSummary)
       });
     }
+
+    // Not completed. Distinguish "still in progress" from "definitively over",
+    // so the checkout page knows whether to keep polling or show a failure.
+    const TERMINAL_FAILURE_STATES = ['FAILED', 'CANCELLED', 'EXPIRED', 'DECLINED'];
+    const terminal = TERMINAL_FAILURE_STATES.includes(state);
+
+    console.log(`${terminal ? '❌' : '⏳'} Payment not completed. State: ${state}`);
+
+    if (terminal) {
+      await PendingTicket.updateMany({ orderId: transactionId }, { status: "failed" });
+    }
+
+    return res.json({
+      success: false,
+      state,
+      terminal,
+      message: terminal
+        ? "Payment was not completed"
+        : "Payment is still being processed"
+    });
 
   } catch (error) {
     console.error("Status Check Error:", error.message);
 
-    // LOGGING TO FILE FOR DEBUGGING
-    try {
-      const fs = await import('fs');
-      const logMessage = `\n[${new Date().toISOString()}] Error in checkStatus:\nMessage: ${error.message}\nStack: ${error.stack}\nTransactionID: ${transactionId}\n`;
-      fs.appendFileSync('backend_error_v2.log', logMessage);
-    } catch (logErr) {
-      console.error("Failed to write to log file:", logErr);
-    }
-
-    // Try to update all tickets status to failed if they exist
-    try {
-      await PendingTicket.updateMany(
-        { orderId: transactionId },
-        { status: "failed" }
-      );
-    } catch (dbError) {
-      console.error("Failed to update ticket status:", dbError.message);
-    }
-
+    // A status lookup that blew up tells us nothing about the payment, so do
+    // NOT mark anything failed here — a later poll may still confirm it.
+    // Report non-terminal so the client keeps polling.
     return res.status(500).json({
       success: false,
+      state: 'ERROR',
+      terminal: false,
       message: "Error verifying payment status",
       error: error.message
     });

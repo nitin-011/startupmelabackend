@@ -1,4 +1,5 @@
 import { upload } from '../config/cloudinary.js';
+import { IS_PRODUCTION } from '../config/environment.js';
 
 // Upload student documents endpoint
 export const uploadStudentDocuments = async (req, res) => {
@@ -82,7 +83,7 @@ export const uploadStudentDocuments = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: error.message || 'Failed to upload documents',
-            error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            error: IS_PRODUCTION ? undefined : error.stack
         });
     }
 };

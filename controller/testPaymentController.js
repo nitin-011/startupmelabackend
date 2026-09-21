@@ -1,12 +1,13 @@
 import Ticket from '../model/Ticket.js';
 import { sendInvoiceEmail } from '../utils/sendEmails.js';
+import { TEST_PAYMENTS_ENABLED } from '../config/environment.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Environment check
-const NODE_ENV = process.env.NODE_ENV || 'development';
-const IS_DEVELOPMENT = NODE_ENV === 'development';
+// This controller issues fully confirmed tickets with no payment, so it is
+// gated on the explicit opt-in from config/environment.js, which can never be
+// true in production or on a deployed host.
 
 // Helper function to generate 9-digit verification code
 const generateVerificationCode = () => {
@@ -20,11 +21,10 @@ const generateVerificationCode = () => {
 
 // TEST MODE: Create order and simulate successful payment
 export const createTestOrder = async (req, res) => {
-    // Only allow in development environment
-    if (!IS_DEVELOPMENT) {
+    if (!TEST_PAYMENTS_ENABLED) {
         return res.status(403).json({
             success: false,
-            message: 'Test payment endpoint is only available in development environment'
+            message: 'Test payment endpoint is disabled'
         });
     }
 
